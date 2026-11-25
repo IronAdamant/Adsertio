@@ -1,0 +1,14 @@
+{
+  "magic": "chisel-store",
+  "version": 1,
+  "test_results": [
+    {"test_id": "tests/a.rs:t2", "passed": false, "recorded_at": 4102444800, "message": "shard failure"}
+  ],
+  "test_edges": {
+    "table": 1,
+    "cols": ["test_id", "code_id", "edge_type", "weight"],
+    "dict": [true, true, true, false],
+    "strings": ["tests/a.rs:t2", "src/a.rs:f:function", "call"],
+    "rows": [[0, 1, 2, 1]]
+  }
+}

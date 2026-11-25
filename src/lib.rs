@@ -2,6 +2,7 @@
 //! that Trammel, Chisel and Probatio left on disk.
 //! Standard library only. See basis.md for the design and SPEC.md for the format.
 
+pub mod chisel;
 pub mod claim;
 pub mod cli;
 pub mod fsx;

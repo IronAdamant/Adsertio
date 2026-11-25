@@ -1,0 +1,9 @@
+{
+  "magic": "chisel-store",
+  "version": 1,
+  "test_results": [
+    {"test_id": "tests/a.rs:t1", "passed": true, "recorded_at": 4102444800},
+    {"test_id": "tests/a.rs:t1", "passed": false, "recorded_at": 4102444801, "message": "regressed"}
+  ],
+  "test_edges": []
+}

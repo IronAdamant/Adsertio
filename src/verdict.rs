@@ -88,6 +88,9 @@ pub fn read_evidence(project: &Path, pointer: &str) -> Evidence {
     if tool == "trammel" {
         return crate::trammel::evaluate(project, pointer);
     }
+    if tool == "chisel" {
+        return crate::chisel::evaluate(project, pointer);
+    }
     let path = rest.split('#').next().unwrap_or("");
     let file = match fsx::project_file(project, path) {
         Ok(f) => f,
@@ -207,7 +210,11 @@ mod tests {
         fs::create_dir_all(d.join("sub")).unwrap();
         fs::write(d.join("ok.json"), "{}").unwrap();
         fs::write(d.join("bad.bin"), [0xffu8, 0xfe]).unwrap();
-        assert_eq!(read_evidence(&d, "chisel:ok.json").state, State::NoAdapter);
+        assert_eq!(read_evidence(&d, "chisel:ok.json").state, State::Unreadable);
+        assert_eq!(
+            read_evidence(&d, "probatio:ok.json").state,
+            State::NoAdapter
+        );
         assert_eq!(read_evidence(&d, "chisel:nope.json").state, State::Missing);
         assert_eq!(read_evidence(&d, "chisel:../x").state, State::Unreadable);
         assert_eq!(read_evidence(&d, "chisel:sub").state, State::Unreadable);
