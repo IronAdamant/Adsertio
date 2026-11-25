@@ -353,8 +353,8 @@ fn docs_match_the_two_binaries_and_the_unpaged_list() {
     let readme = include_str!("../README.md");
     assert!(!readme.contains("One binary"));
     assert!(!readme.contains("One page."));
-    assert!(readme.contains("Two binaries"));
-    assert!(readme.contains("unless limit or offset is set"));
+    assert!(readme.contains("Each archive holds `adsertio` and `adsertio-mcp`"));
+    assert!(readme.contains("With no limit, `view` and `ls` return every claim"));
     let log = include_str!("../LLM_Development.md");
     assert!(!log.contains("1.1.0 in the tree, on a branch"));
     assert!(log.contains("1.1.1"));
