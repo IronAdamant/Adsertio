@@ -1,18 +1,17 @@
 //! Turning evidence pointers into a verdict.
 //!
-//! v0.1 is the skeleton of this: it finds each evidence file inside the
-//! project, refuses anything outside it, reads it strictly, and reports what
-//! it found. It does NOT yet interpret Trammel, Chisel or Probatio output, so
-//! a readable file is `NoAdapter`, which never counts as proof. The adapters
-//! (one per tool) are the main work left; see SPEC.md.
+//! Each pointer is resolved inside the project. A SQLite file is unreadable
+//! (the live stores are JSON; the old databases are for that tool's migrate
+//! command). A readable file this version does not interpret yet is
+//! `NoAdapter`, which never counts as proof.
 
 use crate::claim::{self, Claim};
 use crate::fsx;
 use crate::json::Value;
+use crate::read;
 use std::path::Path;
 
-/// Evidence files larger than this are not read.
-pub const MAX_EVIDENCE_BYTES: u64 = 64 * 1024 * 1024;
+pub use read::MAX_EVIDENCE_BYTES;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum State {
@@ -108,15 +107,27 @@ pub fn read_evidence(project: &Path, pointer: &str) -> Evidence {
             format!("{path} is larger than {MAX_EVIDENCE_BYTES} bytes"),
         );
     }
-    let text = match fsx::read_strict(&file) {
-        Ok(t) => t,
-        Err(e) => return mk(State::Unreadable, e),
+    let bytes = match std::fs::read(&file) {
+        Ok(b) => b,
+        Err(e) => return mk(State::Unreadable, format!("cannot read {path}: {e}")),
     };
+    if bytes.len() as u64 > MAX_EVIDENCE_BYTES {
+        return mk(
+            State::Unreadable,
+            format!("{path} is larger than {MAX_EVIDENCE_BYTES} bytes"),
+        );
+    }
+    if read::is_sqlite(&bytes) {
+        return mk(State::Unreadable, read::sqlite_message(tool));
+    }
+    if std::str::from_utf8(&bytes).is_err() {
+        return mk(State::Unreadable, format!("{path} is not valid UTF-8"));
+    }
     mk(
         State::NoAdapter,
         format!(
             "read {} bytes, but the {tool} adapter is not built yet, so this is not proof",
-            text.len()
+            bytes.len()
         ),
     )
 }
@@ -199,5 +210,19 @@ mod tests {
         assert_eq!(read_evidence(&d, "chisel:sub").state, State::Unreadable);
         assert_eq!(read_evidence(&d, "chisel:bad.bin").state, State::Unreadable);
         assert_eq!(read_evidence(&d, "jest:ok.json").state, State::Unreadable);
+        fs::write(d.join("old.db"), b"SQLite format 3\x00rest").unwrap();
+        let trammel = read_evidence(&d, "trammel:old.db");
+        assert_eq!(trammel.state, State::Unreadable);
+        assert!(
+            trammel.detail.contains("migrate") && trammel.detail.contains("trammel"),
+            "{}",
+            trammel.detail
+        );
+        let chisel = read_evidence(&d, "chisel:old.db");
+        assert!(
+            chisel.detail.contains("migrate") && chisel.detail.contains("chisel"),
+            "{}",
+            chisel.detail
+        );
     }
 }
