@@ -190,6 +190,12 @@ fn a_string_timestamp_or_empty_commit_does_not_pass() {
         .unwrap();
     assert!(!checked.status.success());
     assert!(String::from_utf8_lossy(&checked.stderr).contains("malformed"));
+    let doctor = talk(&dir, call("adsertio_doctor", "{}", 1).as_bytes());
+    assert!(
+        doctor[0].contains("malformed timestamp or commit"),
+        "{}",
+        doctor[0]
+    );
 }
 
 #[cfg(unix)]
@@ -392,12 +398,21 @@ fn jsonrpc_must_be_2_0_and_a_bare_folder_needs_init() {
     assert!(!bare.join("claims").exists());
 }
 
+/// 1.3.1 folded the `adsertio_check` tool into `adsertio_doctor`; the
+/// `adsertio check` command stays for scripts and CI.
 #[test]
-fn adsertio_check_matches_the_cli() {
+fn doctor_does_what_the_check_tool_did() {
     let dir = project("mcp-check");
     init(&dir);
-    let reply = talk(&dir, call("adsertio_check", "{}", 1).as_bytes());
+    let reply = talk(&dir, call("adsertio_doctor", "{}", 1).as_bytes());
     assert!(is_ok(&reply[0]), "{}", reply[0]);
-    assert!(reply[0].contains(r#"\"ok\":true"#), "{}", reply[0]);
-    assert!(reply[0].contains(r#"\"claims\":0"#), "{}", reply[0]);
+    assert!(reply[0].contains("0 claims, none damaged"), "{}", reply[0]);
+    let gone = talk(&dir, call("adsertio_check", "{}", 1).as_bytes());
+    assert!(!is_ok(&gone[0]), "{}", gone[0]);
+    let checked = Command::new(CLI)
+        .arg("check")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(checked.status.success());
 }

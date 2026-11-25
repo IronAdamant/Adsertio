@@ -247,7 +247,8 @@ file fails the whole view and the whole list. It is not left out.
   `--items-file PATH`: the same list as JSON text, or a file holding it (up
   to 4 MiB, UTF-8, a leading byte order mark ignored). Giving both, or one
   twice, is a usage error (exit 2), as is text that is not a JSON array.
-- `adsertio_check` `{}` is the same read as `adsertio check`. It fails on a
+- `adsertio check` (CLI only; there is no MCP tool since 1.3.1, and
+  `adsertio_doctor` reports the same problems) fails on a
   damaged claim, a file in `claims` that is not `slug.md`, a `created` time
   that is not `YYYY-MM-DDTHH:MM:SSZ`, or a pass whose timestamp or commit is
   malformed. It reads each evidence file once per call and does not run git.
@@ -358,7 +359,7 @@ when every check passes. The CLI prints the JSON either way and exits 0 when
 | `version` | never; the version and platform |
 | `store` | no store is found, or `ADSERTIO_DIR` names one that does not exist, or `claims` is not a real folder. The detail says whether `ADSERTIO_DIR` is set |
 | `store_writable` | a probe file cannot be written with `fsx::write_atomic` (`overwrite = false`, a hard link, as a new claim is) and removed |
-| `claims` | a claim is damaged, a file in `claims` is not `slug.md`, or a `created` time is malformed. Evidence is not read |
+| `claims` | a claim is damaged, a file in `claims` is not `slug.md`, a `created` time is malformed, or a pass a pointer names has a malformed timestamp or commit (each evidence file is read once; git is not run) |
 | `leftover_files` | a temp file, attach lock, or break guard is left by a writer that is gone. A live writer's files are listed and pass |
 | `path_length` | Windows only: the claims folder path plus the longest name Adsertio writes there (104 characters) reaches 260 |
 | `network_drive` | Windows only, when the drive type can be read: the store is on a network drive or a UNC path |

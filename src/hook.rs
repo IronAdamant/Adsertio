@@ -18,6 +18,7 @@ const PARAMS: &[Param] = &[Param {
     required: false,
     doc: "claude, cursor or generic.",
     choices: &[],
+    fields: &[],
 }];
 
 /// The view the hook runs: open claims only, without per-pointer detail, and

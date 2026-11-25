@@ -6,6 +6,20 @@
   `.adsertio` folder is found, so a session hook set for every project stays
   quiet where Adsertio is not used. With ADSERTIO_DIR set, a missing store is
   still an error. `adsertio hook` now adds it.
+- Smaller tool definitions. Every agent turn reads `tools/list` and the
+  server instructions again, so they cost on every call. The `tools` array
+  went from 5,588 to 3,788 bytes (compact JSON) and `instructions` from 765
+  to 487. Descriptions are short and say what to call when; detail lives in
+  `adsertio_guide`, SPEC and README. Batch item schemas (`claims`, `items`)
+  now give each field's type and the required fields, with no per-field
+  descriptions. `states` items carry an `enum`, and `limit` a `maximum` of
+  500. `tests/tool_budget.rs` keeps the array at or under 4,000 bytes and
+  the instructions under 500.
+- Removed the `adsertio_check` MCP tool; `adsertio_doctor` covers it. Its
+  `claims` check now also reports a pass with a malformed timestamp or
+  commit, as `check` does, and `fix: true` clears leftover temp and lock
+  files. The `adsertio check` command is unchanged, for scripts and CI.
+  `tools/list` has six tools.
 
 ## 1.3.0
 

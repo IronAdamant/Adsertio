@@ -192,13 +192,14 @@ For Claude Code (`.mcp.json`) or Cursor (`.cursor/mcp.json`):
 | `adsertio_attach` | Add pointers to existing claims. Pass `items`, a list of `{id, evidence}`, for several claims in one call. A bad or duplicate pointer writes nothing. |
 | `adsertio_view` | The verdict and the state of every pointer. |
 | `adsertio_ls` | Id, summary, and pointer count. No verdict. |
-| `adsertio_check` | Fail on any damaged claim. Also clears a lock or temp file left by a writer that is gone. |
-| `adsertio_doctor` | What is wrong with the store, git, or the evidence files, each with a fix. |
+| `adsertio_doctor` | What is wrong with the store, damaged claims, git, or the evidence files, each with a fix. `fix: true` clears a lock or temp file left by a writer that is gone. |
 | `adsertio_guide` | Pointer shapes, the verdict rule, paging, and what to do after the conversation is compacted. |
 
-Each tool is also a CLI command without the `adsertio_` prefix.
+Each tool is also a CLI command without the `adsertio_` prefix. `adsertio check`, which fails on any damaged claim, is a CLI command only (for scripts and CI); over MCP, `adsertio_doctor` reports the same problems.
 
 Each MCP call is one agent turn, and every turn reads the whole conversation again, so an agent should record all its claims in one `adsertio_claim` call and attach in one `adsertio_attach` call. The tool descriptions say so.
+
+The tool definitions are kept small for the same reason: the host sends them on every turn. The `tools` array of `tools/list` stays at or under 4,000 bytes and the server `instructions` under 500 bytes (`tests/tool_budget.rs` checks both). Descriptions say what a tool does, when to call it, and the one thing to get right; the rest is in `adsertio_guide`, which an agent calls when it needs it.
 
 ## After compaction: the session hook
 
@@ -223,7 +224,7 @@ so the agent sees the claims that are not verified and reads them again instead 
 - the version and platform
 - where the store is, and `ADSERTIO_DIR`
 - that the claims folder takes a new file (it writes and removes a probe the way a new claim is written)
-- the claim count, and any damaged claim
+- the claim count, any damaged claim, and any pass whose timestamp or commit is malformed
 - temp or lock files left by a process that is gone
 - `git` on `PATH`, and what `git rev-parse HEAD` says
 - `.trammel/store`, `.chisel/store` and `.probatio`: there or not, size against the read limits, and whether Adsertio can read them

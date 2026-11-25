@@ -21,8 +21,11 @@ pub struct Param {
     pub kind: Kind,
     pub required: bool,
     pub doc: &'static str,
-    /// Allowed values for a `Str` parameter; empty means free text.
+    /// Allowed values for a `Str` parameter, or for each item of a
+    /// `StrList`; empty means free text.
     pub choices: &'static [&'static str],
+    /// The fields of each object in an `ObjList`; empty for other kinds.
+    pub fields: &'static [Param],
 }
 
 pub struct Tool {
@@ -44,6 +47,8 @@ pub const MAX_STRING: usize = 20_000;
 /// The range `limit` actually accepts. Schema minimum and the tool agree.
 pub const LIMIT_RANGE: &str =
     "limit must be a whole number from 1 to 500. Omit limit to return every claim.";
+/// Largest `limit`.
+pub const MAX_PAGE: u64 = 500;
 /// Most items in a list argument.
 pub const MAX_LIST: usize = 50;
 
@@ -83,58 +88,10 @@ impl Args {
 }
 
 impl Tool {
+    /// The JSON schema for `inputSchema`. Kept small: every turn of an agent
+    /// reads it again.
     pub fn schema(&self) -> Value {
-        let props: Vec<(String, Value)> = self
-            .params
-            .iter()
-            .map(|p| {
-                let mut f = vec![(
-                    "type",
-                    Value::str(match p.kind {
-                        Kind::Str => "string",
-                        Kind::UInt => "integer",
-                        Kind::Bool => "boolean",
-                        Kind::StrList | Kind::ObjList => "array",
-                    }),
-                )];
-                if p.kind == Kind::StrList {
-                    f.push(("items", Value::obj(vec![("type", Value::str("string"))])));
-                }
-                if p.kind == Kind::ObjList {
-                    f.push(("items", Value::obj(vec![("type", Value::str("object"))])));
-                    f.push(("maxItems", Value::uint(MAX_LIST as u64)));
-                }
-                if p.kind == Kind::UInt {
-                    // `limit` pages a list, so 0 is not a page. Other counts
-                    // (offset) still start at 0.
-                    let minimum = if p.name == "limit" { 1 } else { 0 };
-                    f.push(("minimum", Value::int(minimum)));
-                }
-                if !p.choices.is_empty() {
-                    f.push((
-                        "enum",
-                        Value::Array(p.choices.iter().map(|c| Value::str(*c)).collect()),
-                    ));
-                }
-                f.push(("description", Value::str(p.doc)));
-                (p.name.to_string(), Value::obj(f))
-            })
-            .collect();
-        let required: Vec<Value> = self
-            .params
-            .iter()
-            .filter(|p| p.required)
-            .map(|p| Value::str(p.name))
-            .collect();
-        let mut s = vec![
-            ("type", Value::str("object")),
-            ("properties", Value::Object(props)),
-            ("additionalProperties", Value::Bool(false)),
-        ];
-        if !required.is_empty() {
-            s.push(("required", Value::Array(required)));
-        }
-        Value::obj(s)
+        object_schema(self.params, true)
     }
 
     /// Check `args` against the parameter table. Unknown fields, wrong types,
@@ -142,6 +99,76 @@ impl Tool {
     pub fn validate(&self, args: &Value) -> Result<Args, String> {
         validate_fields(self.name, self.params, args)
     }
+}
+
+/// `{"type":"object","properties":...}` for `params`. Item schemas
+/// (`describe` false) carry types and `required` but no descriptions: the
+/// parent parameter describes the item once.
+fn object_schema(params: &[Param], describe: bool) -> Value {
+    let props: Vec<(String, Value)> = params
+        .iter()
+        .map(|p| (p.name.to_string(), param_schema(p, describe)))
+        .collect();
+    let required: Vec<Value> = params
+        .iter()
+        .filter(|p| p.required)
+        .map(|p| Value::str(p.name))
+        .collect();
+    let mut s = vec![
+        ("type", Value::str("object")),
+        ("properties", Value::Object(props)),
+    ];
+    // Items leave it out to stay small; the tool still rejects an unknown
+    // field in an item.
+    if describe {
+        s.push(("additionalProperties", Value::Bool(false)));
+    }
+    if !required.is_empty() {
+        s.push(("required", Value::Array(required)));
+    }
+    Value::obj(s)
+}
+
+fn param_schema(p: &Param, describe: bool) -> Value {
+    let kind = match p.kind {
+        Kind::Str => "string",
+        Kind::UInt => "integer",
+        Kind::Bool => "boolean",
+        Kind::StrList | Kind::ObjList => "array",
+    };
+    let enumerated = || {
+        (
+            "enum",
+            Value::Array(p.choices.iter().map(|c| Value::str(*c)).collect()),
+        )
+    };
+    let mut f = vec![("type", Value::str(kind))];
+    match p.kind {
+        Kind::StrList => {
+            let mut item = vec![("type", Value::str("string"))];
+            if !p.choices.is_empty() {
+                item.push(enumerated());
+            }
+            f.push(("items", Value::obj(item)));
+        }
+        Kind::ObjList => {
+            f.push(("items", object_schema(p.fields, false)));
+            f.push(("maxItems", Value::uint(MAX_LIST as u64)));
+        }
+        // `limit` pages a list, so 0 is not a page. Other counts (offset)
+        // still start at 0.
+        Kind::UInt if p.name == "limit" => {
+            f.push(("minimum", Value::int(1)));
+            f.push(("maximum", Value::uint(MAX_PAGE)));
+        }
+        Kind::UInt => f.push(("minimum", Value::int(0))),
+        Kind::Str if !p.choices.is_empty() => f.push(enumerated()),
+        Kind::Str | Kind::Bool => {}
+    }
+    if describe && !p.doc.is_empty() {
+        f.push(("description", Value::str(p.doc)));
+    }
+    Value::obj(f)
 }
 
 /// Check `args` against `params`, the way a tool checks its arguments. Used
@@ -207,7 +234,7 @@ fn check_value(p: &Param, v: &Value) -> Result<(), String> {
         (Kind::Str, _) => bad("a string"),
         (Kind::UInt, v) if v.as_u64().is_some() => {
             let n = v.as_u64().unwrap();
-            if p.name == "limit" && !(1..=500).contains(&n) {
+            if p.name == "limit" && !(1..=MAX_PAGE).contains(&n) {
                 return Err(LIMIT_RANGE.into());
             }
             Ok(())

@@ -198,7 +198,7 @@ fn writable_check(dir: &Path) -> Check {
 }
 
 fn claims_check(store: &Store) -> Check {
-    match crate::tools::claim_problems(store, false, false) {
+    match crate::tools::claim_problems(store, false, true) {
         Ok(found) if found.problems.is_empty() => {
             Check::pass("claims", format!("{} claims, none damaged", found.claims))
         }

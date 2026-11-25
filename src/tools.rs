@@ -4,7 +4,7 @@ use crate::claim::{self, Claim};
 use crate::fsx;
 use crate::json::Value;
 use crate::store::Store;
-use crate::tool::{Args, Kind, Param, Tool};
+use crate::tool::{Args, Kind, Param, Tool, MAX_PAGE};
 use crate::verdict;
 
 pub const GROUPS: &[&str] = &["core"];
@@ -13,74 +13,67 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         name: "adsertio_claim",
         group: "core",
-        description: "Record claims (one line each: something is true) with pointers to the evidence that would prove them. Record all claims in one call: pass claims, a list of up to 50 {summary, evidence, id?, author?, body?, tags?}. Every item is checked first; a bad item writes nothing. The single-claim fields (summary, evidence, ...) still record one. Evidence stays in Trammel, Chisel or Probatio; nothing is copied. Never overwrites. The verdict is computed by adsertio_view, never stored.",
+        description: "Record claims (one line each: something is true) with evidence pointers tool:path[#selector] (tool trammel, chisel or probatio; path inside the project). Record all claims in one call with claims; a bad item writes nothing. Never overwrites.",
         params: &[
-            Param { name: "claims", kind: Kind::ObjList, required: false, doc: "Several claims in one call, up to 50. Each item takes summary (required), evidence, id, author, body and tags, the same as one claim. Ids must be new and different from each other. Do not also pass the single-claim fields.", choices: &[] },
-            Param { name: "summary", kind: Kind::Str, required: false, doc: "One claim: one line, up to 200 characters. Required unless claims is passed.", choices: &[] },
-            Param { name: "evidence", kind: Kind::StrList, required: false, doc: "Pointers, each tool:path[#selector] with tool trammel, chisel or probatio and a path inside the project.", choices: &[] },
-            Param { name: "author", kind: Kind::Str, required: false, doc: "Agent name slug. Default: agent.", choices: &[] },
-            Param { name: "body", kind: Kind::Str, required: false, doc: "Why the claim matters, under about 300 words.", choices: &[] },
-            Param { name: "id", kind: Kind::Str, required: false, doc: "Slug. Made from the summary if absent. Never overwrites.", choices: &[] },
-            Param { name: "tags", kind: Kind::StrList, required: false, doc: "Tag slugs.", choices: &[] },
+            Param { name: "claims", kind: Kind::ObjList, required: false, doc: "Several claims, each with the fields below. Not with the single-claim fields.", choices: &[], fields: CLAIM_FIELDS },
+            Param { name: "summary", kind: Kind::Str, required: false, doc: "One claim: one line, at most 200 characters.", choices: &[], fields: &[] },
+            Param { name: "evidence", kind: Kind::StrList, required: false, doc: "", choices: &[], fields: &[] },
+            Param { name: "author", kind: Kind::Str, required: false, doc: "Agent slug. Default: agent.", choices: &[], fields: &[] },
+            Param { name: "body", kind: Kind::Str, required: false, doc: "Why it matters, under 300 words.", choices: &[], fields: &[] },
+            Param { name: "id", kind: Kind::Str, required: false, doc: "Slug. Default: made from summary.", choices: &[], fields: &[] },
+            Param { name: "tags", kind: Kind::StrList, required: false, doc: "Slugs.", choices: &[], fields: &[] },
         ],
         run: claim_add,
     },
     Tool {
         name: "adsertio_view",
         group: "core",
-        description: "The verified or unverified view: each claim with its verdict and the state of every piece of evidence. Verified needs evidence and all of it passing; refuted if any fails; otherwise unverified, with the reason per pointer.",
+        description: "Claims with their verdict and each pointer's state. verified: has evidence, all passing; refuted: any failing; else unverified, with a reason per pointer. Omit limit for every match; if truncated, pass next_after as after.",
         params: &[
-            Param { name: "id", kind: Kind::Str, required: false, doc: "Only this claim.", choices: &[] },
-            Param { name: "verdict", kind: Kind::Str, required: false, doc: "Only claims with this verdict. Do not also pass states.", choices: &["verified", "refuted", "unverified"] },
-            Param { name: "states", kind: Kind::StrList, required: false, doc: "Only claims with one of these verdicts: verified, refuted, unverified. Do not also pass verdict.", choices: &[] },
-            Param { name: "compact", kind: Kind::Bool, required: false, doc: "Omit evidence detail. Each pointer still has its state.", choices: &[] },
-            Param { name: "limit", kind: Kind::UInt, required: false, doc: "How many claims to return. Omit it to return every matching claim. Maximum 500 when paging.", choices: &[] },
-            Param { name: "offset", kind: Kind::UInt, required: false, doc: "Skip this many matching claims. Omit it, and limit, to return every claim. Prefer after: offset can skip a claim when a verdict changes between pages.", choices: &[] },
-            Param { name: "after", kind: Kind::Str, required: false, doc: "Stable cursor. Pass next_after from the previous page. Claims are ordered by created, then by id.", choices: &[] },
+            Param { name: "id", kind: Kind::Str, required: false, doc: "Only this claim.", choices: &[], fields: &[] },
+            Param { name: "verdict", kind: Kind::Str, required: false, doc: "Not with states.", choices: &["verified", "refuted", "unverified"], fields: &[] },
+            Param { name: "states", kind: Kind::StrList, required: false, doc: "Any of these verdicts. Not with verdict.", choices: &["verified", "refuted", "unverified"], fields: &[] },
+            Param { name: "compact", kind: Kind::Bool, required: false, doc: "Pointer states without detail.", choices: &[], fields: &[] },
+            Param { name: "limit", kind: Kind::UInt, required: false, doc: "", choices: &[], fields: &[] },
+            Param { name: "offset", kind: Kind::UInt, required: false, doc: "Skip this many matches. Prefer after.", choices: &[], fields: &[] },
+            Param { name: "after", kind: Kind::Str, required: false, doc: "Cursor: next_after from the last page.", choices: &[], fields: &[] },
         ],
         run: view,
     },
     Tool {
         name: "adsertio_attach",
         group: "core",
-        description: "Add evidence pointers to existing claims. For several claims, use one call: items, a list of up to 50 {id, evidence}. Every item is checked first; a bad pointer, a duplicate, or an unknown id writes nothing. Each claim file is replaced whole under its own lock. id and evidence alone still update one claim.",
+        description: "Add evidence pointers to existing claims. For several claims use one call with items; a bad, repeated or already present pointer, or an unknown id, writes nothing.",
         params: &[
-            Param { name: "items", kind: Kind::ObjList, required: false, doc: "Several claims in one call, up to 50: each {id, evidence}. One item per claim. Do not also pass id or evidence.", choices: &[] },
-            Param { name: "id", kind: Kind::Str, required: false, doc: "One claim id. Required unless items is passed.", choices: &[] },
-            Param { name: "evidence", kind: Kind::StrList, required: false, doc: "Pointers to add to that claim, each tool:path[#selector]. Duplicates are an error.", choices: &[] },
+            Param { name: "items", kind: Kind::ObjList, required: false, doc: "One {id, evidence} per claim. Not with id or evidence.", choices: &[], fields: ATTACH_FIELDS },
+            Param { name: "id", kind: Kind::Str, required: false, doc: "One claim id.", choices: &[], fields: &[] },
+            Param { name: "evidence", kind: Kind::StrList, required: false, doc: "Pointers to add to it.", choices: &[], fields: &[] },
         ],
         run: attach,
     },
     Tool {
         name: "adsertio_ls",
         group: "core",
-        description: "List claim ids, summaries, and how many pointers each has. Does not read the evidence and does not report a verdict; call adsertio_view for that. Returns every claim unless limit or offset is set. count is the whole store.",
+        description: "Claim ids, summaries and pointer counts. Cheap: reads no evidence and gives no verdict. count is the whole store.",
         params: &[
-            Param { name: "limit", kind: Kind::UInt, required: false, doc: "How many claims to return. Omit it to return every claim. Maximum 500 when paging.", choices: &[] },
-            Param { name: "offset", kind: Kind::UInt, required: false, doc: "Skip this many claims. Omit it, and limit, to return every claim.", choices: &[] },
+            Param { name: "limit", kind: Kind::UInt, required: false, doc: "", choices: &[], fields: &[] },
+            Param { name: "offset", kind: Kind::UInt, required: false, doc: "Skip this many.", choices: &[], fields: &[] },
         ],
         run: ls,
     },
     Tool {
-        name: "adsertio_check",
-        group: "core",
-        description: "Read every claim once. Fail on damage, a bad file name, a bad created time, or a malformed evidence timestamp. A lock or temp file whose writer is gone is removed. Same as the adsertio check command.",
-        params: &[],
-        run: check_tool,
-    },
-    Tool {
         name: "adsertio_doctor",
         group: "core",
-        description: "Diagnose problems: the store and ADSERTIO_DIR, whether the claims folder is writable, damaged claims, temp or lock files left by a dead process, git and HEAD, whether the Trammel, Chisel and Probatio files can be read, and (on Windows) path length and network drives. Returns {ok, checks: [{name, ok, detail, fix}]}; each failing check has a fix. fix: true removes leftover temp and lock files, as adsertio_check does. Does not read the claims' evidence.",
+        description: "Find what is wrong: the store, damaged claims, malformed evidence times, git, and the Trammel, Chisel and Probatio files. Returns {ok, checks}; each failing check has a fix.",
         params: &[
-            Param { name: "fix", kind: Kind::Bool, required: false, doc: "Remove temp and lock files whose writer is gone, then report. Nothing else is changed.", choices: &[] },
+            Param { name: "fix", kind: Kind::Bool, required: false, doc: "First remove temp and lock files left by a dead writer.", choices: &[], fields: &[] },
         ],
         run: doctor,
     },
     Tool {
         name: "adsertio_guide",
         group: "core",
-        description: "Short guide for an agent: how a verdict is decided, the pointer shapes, paging, and what to call after the conversation is compacted. Does not read the store.",
+        description: "How a verdict is decided, pointer shapes, paging, and what to do after compaction.",
         params: &[],
         run: guide,
     },
@@ -95,6 +88,7 @@ const CLAIM_FIELDS: &[Param] = &[
         required: true,
         doc: "The claim, one line, up to 200 characters.",
         choices: &[],
+        fields: &[],
     },
     Param {
         name: "evidence",
@@ -102,6 +96,7 @@ const CLAIM_FIELDS: &[Param] = &[
         required: false,
         doc: "Pointers, each tool:path[#selector].",
         choices: &[],
+        fields: &[],
     },
     Param {
         name: "author",
@@ -109,6 +104,7 @@ const CLAIM_FIELDS: &[Param] = &[
         required: false,
         doc: "Agent name slug. Default: agent.",
         choices: &[],
+        fields: &[],
     },
     Param {
         name: "body",
@@ -116,6 +112,7 @@ const CLAIM_FIELDS: &[Param] = &[
         required: false,
         doc: "Why the claim matters.",
         choices: &[],
+        fields: &[],
     },
     Param {
         name: "id",
@@ -123,6 +120,7 @@ const CLAIM_FIELDS: &[Param] = &[
         required: false,
         doc: "Slug. Made from the summary if absent.",
         choices: &[],
+        fields: &[],
     },
     Param {
         name: "tags",
@@ -130,6 +128,7 @@ const CLAIM_FIELDS: &[Param] = &[
         required: false,
         doc: "Tag slugs.",
         choices: &[],
+        fields: &[],
     },
 ];
 
@@ -142,6 +141,7 @@ const ATTACH_FIELDS: &[Param] = &[
         required: true,
         doc: "Claim id.",
         choices: &[],
+        fields: &[],
     },
     Param {
         name: "evidence",
@@ -149,6 +149,7 @@ const ATTACH_FIELDS: &[Param] = &[
         required: true,
         doc: "Pointers to add.",
         choices: &[],
+        fields: &[],
     },
 ];
 
@@ -636,7 +637,6 @@ fn view(a: &Args) -> Result<Value, String> {
     crate::cache::with_cache(|| Ok(crate::paging::assemble(&project, &claims, &query, &hint)))
 }
 
-const MAX_PAGE: u64 = 500;
 const LARGE_LIST: u64 = 100;
 
 /// `None` means no verdict filter. `verdict` and `states` are not combined.
@@ -778,10 +778,6 @@ fn doctor(a: &Args) -> Result<Value, String> {
     Ok(crate::doctor::run(a.bool("fix") == Some(true)))
 }
 
-fn check_tool(_a: &Args) -> Result<Value, String> {
-    store_check()
-}
-
 pub fn store_check() -> Result<Value, String> {
     let store = Store::open()?;
     crate::store::claims_ready(&store, false)?;
@@ -908,7 +904,7 @@ fn guide(_a: &Args) -> Result<Value, String> {
         (
             "problems",
             Value::str(
-                "adsertio_doctor reports what is wrong with the store, git, or the evidence files, each with a fix.",
+                "adsertio_doctor reports what is wrong with the store, damaged claims, git, or the evidence files, each with a fix. fix: true first removes temp and lock files whose writer is gone. adsertio check (CLI) fails on any damaged claim, for scripts and CI.",
             ),
         ),
         (
@@ -936,7 +932,7 @@ fn guide(_a: &Args) -> Result<Value, String> {
         (
             "writes",
             Value::str(
-                "Record all claims in one call: adsertio_claim with claims, a list of up to 50 {summary, evidence, id?}. Add pointers to several claims in one call: adsertio_attach with items, a list of {id, evidence}. Every item is checked first and a bad one writes nothing. adsertio_claim never overwrites. A repeated pointer is an error and the file is left unchanged. A claim holds at most 50 pointers. The body is at most 20000 bytes. The claim file is at most 262144 bytes. Duplicate tags and evidence on a new claim are kept once.",
+                "Record all claims in one call: adsertio_claim with claims, a list of up to 50 {summary, evidence, id?}. Add pointers to several claims in one call: adsertio_attach with items, a list of {id, evidence}. Every item is checked first and a bad one writes nothing. Ids in one call must differ. adsertio_claim never overwrites. A repeated pointer is an error and the file is left unchanged. A claim holds at most 50 pointers. The body is at most 20000 bytes. The claim file is at most 262144 bytes. Duplicate tags and evidence on a new claim are kept once.",
             ),
         ),
     ]))

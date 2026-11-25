@@ -56,7 +56,7 @@ cargo build --release --locked
   `tests/chisel.rs`, `tests/probatio.rs`, `tests/fresh.rs`, `tests/attach_ls.rs`,
   `tests/load.rs`, `tests/fixes.rs`, `tests/perf.rs`, `tests/ux.rs`,
   `tests/review3.rs`, `tests/review4.rs`, `tests/review5.rs`,
-  `tests/v130.rs`, `tests/zero_deps.rs`:
+  `tests/v130.rs`, `tests/tool_budget.rs`, `tests/zero_deps.rs`:
   the failure modes the design avoids. Keep them passing. `tests/common/mod.rs`
   holds shared helpers. Fixtures in `tests/fixtures/probatio/real` and
   `tests/fixtures/chisel/real-*` were written by the real tools; prefer that
