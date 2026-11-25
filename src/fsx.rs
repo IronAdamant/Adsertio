@@ -213,6 +213,55 @@ fn temp_abandoned(path: &Path, name: &str) -> bool {
     }
 }
 
+/// Adsertio's own work files in `dir` (temp files, attach locks, break
+/// guards), each with `true` when its writer is gone and it may be removed.
+/// Reads only.
+pub fn work_files(dir: &Path) -> Vec<(String, bool)> {
+    let Ok(rd) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in rd.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !is_work_file(&name) {
+            continue;
+        }
+        let path = entry.path();
+        let abandoned = if name.ends_with(".md.lock.break") {
+            matches!(file_age(&path), Age::Secs(secs) if secs > BREAK_STALE)
+        } else if name.ends_with(".md.lock") {
+            lock_file_is_stale(&path)
+        } else {
+            temp_abandoned(&path, &name)
+        };
+        out.push((name, abandoned));
+    }
+    out.sort();
+    out
+}
+
+/// Remove the work files in `dir` whose writer is gone, the same way `check`
+/// does, and return the names removed. A live writer's files are left alone.
+pub fn clear_abandoned(dir: &Path) -> Vec<String> {
+    let before = work_files(dir);
+    sweep_abandoned_temps(dir);
+    for (name, abandoned) in &before {
+        if !abandoned {
+            continue;
+        }
+        if name.ends_with(".md.lock") {
+            break_abandoned_lock(&dir.join(name));
+        } else if name.ends_with(".md.lock.break") {
+            let _ = fs::remove_file(dir.join(name));
+        }
+    }
+    before
+        .into_iter()
+        .filter(|(name, abandoned)| *abandoned && !dir.join(name).exists())
+        .map(|(name, _)| name)
+        .collect()
+}
+
 /// A file Adsertio itself leaves in the claims folder for a moment: a temp
 /// file (`.<name>.tmp-<pid>-<n>`), an attach lock (`.<id>.md.lock`), or the
 /// guard taken to break a dead lock (`.<id>.md.lock.break`). Any other name

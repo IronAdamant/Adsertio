@@ -58,8 +58,9 @@ pub fn apply(project: &Path, created: &str, evidence: &mut Evidence) {
             {
                 evidence.state = State::Stale;
                 evidence.detail = format!(
-                    "stale: evidence commit {commit} is not HEAD {head}; {}",
-                    evidence.detail
+                    "stale: evidence commit {commit} is not HEAD {head}; {}{}",
+                    evidence.detail,
+                    rerun_hint(&evidence.pointer)
                 );
                 return;
             }
@@ -75,6 +76,16 @@ pub fn apply(project: &Path, created: &str, evidence: &mut Evidence) {
     }
     if evidence.at.is_none() {
         note_no_time(evidence);
+    }
+}
+
+/// What to do when a pass is stale only because its commit is not HEAD. This
+/// is the usual case after an agent tests uncommitted work and then commits.
+fn rerun_hint(pointer: &str) -> &'static str {
+    if pointer.starts_with("trammel:") {
+        "; fix: rerun the tests at HEAD (for example verify_step again for that step)"
+    } else {
+        "; fix: rerun the tests at HEAD (for example chisel run -- <test command>)"
     }
 }
 
@@ -189,7 +200,7 @@ fn head_commit(project: &Path) -> Result<String, String> {
     crate::cache::head(project, || head_commit_uncached(project))
 }
 
-fn head_commit_uncached(project: &Path) -> Result<String, String> {
+pub fn head_commit_uncached(project: &Path) -> Result<String, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(project)

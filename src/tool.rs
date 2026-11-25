@@ -12,6 +12,8 @@ pub enum Kind {
     UInt,
     Bool,
     StrList,
+    /// An array of objects. The tool checks each object's fields.
+    ObjList,
 }
 
 pub struct Param {
@@ -65,6 +67,16 @@ impl Args {
             .unwrap_or_default()
     }
 
+    /// The objects of an `ObjList` argument. Empty when it was not passed.
+    pub fn objects(&self, name: &str) -> &[Value] {
+        self.get(name).and_then(Value::as_array).unwrap_or_default()
+    }
+
+    /// `true` when the argument was passed (and is not null).
+    pub fn has(&self, name: &str) -> bool {
+        self.get(name).is_some()
+    }
+
     fn get(&self, name: &str) -> Option<&Value> {
         self.pairs.iter().find(|(k, _)| k == name).map(|(_, v)| v)
     }
@@ -82,11 +94,15 @@ impl Tool {
                         Kind::Str => "string",
                         Kind::UInt => "integer",
                         Kind::Bool => "boolean",
-                        Kind::StrList => "array",
+                        Kind::StrList | Kind::ObjList => "array",
                     }),
                 )];
                 if p.kind == Kind::StrList {
                     f.push(("items", Value::obj(vec![("type", Value::str("string"))])));
+                }
+                if p.kind == Kind::ObjList {
+                    f.push(("items", Value::obj(vec![("type", Value::str("object"))])));
+                    f.push(("maxItems", Value::uint(MAX_LIST as u64)));
                 }
                 if p.kind == Kind::UInt {
                     // `limit` pages a list, so 0 is not a page. Other counts
@@ -124,46 +140,52 @@ impl Tool {
     /// Check `args` against the parameter table. Unknown fields, wrong types,
     /// missing required fields, and values outside `choices` are all errors.
     pub fn validate(&self, args: &Value) -> Result<Args, String> {
-        let pairs = match args {
-            Value::Object(p) => p.clone(),
-            Value::Null => Vec::new(),
-            other => {
-                return Err(format!(
-                    "arguments must be an object, got {}",
-                    other.type_name()
-                ))
-            }
-        };
-        let unknown: Vec<&str> = pairs
-            .iter()
-            .map(|(k, _)| k.as_str())
-            .filter(|k| !self.params.iter().any(|p| p.name == *k))
-            .collect();
-        if !unknown.is_empty() {
-            let valid: Vec<&str> = self.params.iter().map(|p| p.name).collect();
-            return Err(format!(
-                "unknown argument(s) for {}: {}. Valid: {}",
-                self.name,
-                unknown.join(", "),
-                valid.join(", ")
-            ));
-        }
-        for p in self.params {
-            let v = pairs.iter().find(|(k, _)| k == p.name).map(|(_, v)| v);
-            match v {
-                None | Some(Value::Null) if p.required => {
-                    return Err(format!("missing required argument: {}", p.name))
-                }
-                None | Some(Value::Null) => {}
-                Some(v) => check_value(p, v)?,
-            }
-        }
-        let pairs = pairs
-            .into_iter()
-            .filter(|(_, v)| *v != Value::Null)
-            .collect();
-        Ok(Args { pairs })
+        validate_fields(self.name, self.params, args)
     }
+}
+
+/// Check `args` against `params`, the way a tool checks its arguments. Used
+/// for the tool itself and for each object in an `ObjList` argument. `label`
+/// names the tool or the item in the error.
+pub fn validate_fields(label: &str, params: &[Param], args: &Value) -> Result<Args, String> {
+    let pairs = match args {
+        Value::Object(p) => p.clone(),
+        Value::Null => Vec::new(),
+        other => {
+            return Err(format!(
+                "arguments must be an object, got {}",
+                other.type_name()
+            ))
+        }
+    };
+    let unknown: Vec<&str> = pairs
+        .iter()
+        .map(|(k, _)| k.as_str())
+        .filter(|k| !params.iter().any(|p| p.name == *k))
+        .collect();
+    if !unknown.is_empty() {
+        let valid: Vec<&str> = params.iter().map(|p| p.name).collect();
+        return Err(format!(
+            "unknown argument(s) for {label}: {}. Valid: {}",
+            unknown.join(", "),
+            valid.join(", ")
+        ));
+    }
+    for p in params {
+        let v = pairs.iter().find(|(k, _)| k == p.name).map(|(_, v)| v);
+        match v {
+            None | Some(Value::Null) if p.required => {
+                return Err(format!("missing required argument: {}", p.name))
+            }
+            None | Some(Value::Null) => {}
+            Some(v) => check_value(p, v)?,
+        }
+    }
+    let pairs = pairs
+        .into_iter()
+        .filter(|(_, v)| *v != Value::Null)
+        .collect();
+    Ok(Args { pairs })
 }
 
 fn check_value(p: &Param, v: &Value) -> Result<(), String> {
@@ -210,5 +232,25 @@ fn check_value(p: &Param, v: &Value) -> Result<(), String> {
             Ok(())
         }
         (Kind::StrList, _) => bad("an array of strings"),
+        (Kind::ObjList, Value::Array(items)) => {
+            if items.len() > MAX_LIST {
+                return Err(format!(
+                    "{} has more than {MAX_LIST} items; split it into calls of {MAX_LIST} or fewer",
+                    p.name
+                ));
+            }
+            for (n, item) in items.iter().enumerate() {
+                if !matches!(item, Value::Object(_)) {
+                    return Err(format!(
+                        "{} item {} must be an object, got {}",
+                        p.name,
+                        n + 1,
+                        item.type_name()
+                    ));
+                }
+            }
+            Ok(())
+        }
+        (Kind::ObjList, _) => bad("an array of objects"),
     }
 }

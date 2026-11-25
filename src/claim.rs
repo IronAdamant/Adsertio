@@ -268,6 +268,12 @@ fn cmp_id(left: &str, right: &str) -> std::cmp::Ordering {
 
 /// Every claim, oldest first. A damaged claim fails the whole read.
 pub fn load_all(store: &Store) -> Result<Vec<Claim>, String> {
+    load_all_with(store, true)
+}
+
+/// [`load_all`], and with `sweep` false it removes nothing: `doctor` without
+/// `--fix` only reads.
+pub fn load_all_with(store: &Store, sweep: bool) -> Result<Vec<Claim>, String> {
     let dir = store.claims_dir();
     match fs::symlink_metadata(&dir) {
         Ok(meta) if meta.file_type().is_symlink() => {
@@ -283,7 +289,9 @@ pub fn load_all(store: &Store) -> Result<Vec<Claim>, String> {
         }
         Err(e) => return Err(format!("cannot read {}: {e}", dir.display())),
     }
-    fsx::sweep_abandoned_temps(&dir);
+    if sweep {
+        fsx::sweep_abandoned_temps(&dir);
+    }
     let rd = match fs::read_dir(&dir) {
         Ok(r) => r,
         Err(e) => return Err(format!("cannot read {}: {e}", dir.display())),

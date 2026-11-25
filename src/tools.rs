@@ -13,9 +13,10 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         name: "adsertio_claim",
         group: "core",
-        description: "Record a claim (one line: something is true) with pointers to the evidence that would prove it. Evidence stays in Trammel, Chisel or Probatio; nothing is copied. The verdict is computed by adsertio_view, never stored.",
+        description: "Record claims (one line each: something is true) with pointers to the evidence that would prove them. Record all claims in one call: pass claims, a list of up to 50 {summary, evidence, id?, author?, body?, tags?}. Every item is checked first; a bad item writes nothing. The single-claim fields (summary, evidence, ...) still record one. Evidence stays in Trammel, Chisel or Probatio; nothing is copied. Never overwrites. The verdict is computed by adsertio_view, never stored.",
         params: &[
-            Param { name: "summary", kind: Kind::Str, required: true, doc: "The claim, one line, up to 200 characters.", choices: &[] },
+            Param { name: "claims", kind: Kind::ObjList, required: false, doc: "Several claims in one call, up to 50. Each item takes summary (required), evidence, id, author, body and tags, the same as one claim. Ids must be new and different from each other. Do not also pass the single-claim fields.", choices: &[] },
+            Param { name: "summary", kind: Kind::Str, required: false, doc: "One claim: one line, up to 200 characters. Required unless claims is passed.", choices: &[] },
             Param { name: "evidence", kind: Kind::StrList, required: false, doc: "Pointers, each tool:path[#selector] with tool trammel, chisel or probatio and a path inside the project.", choices: &[] },
             Param { name: "author", kind: Kind::Str, required: false, doc: "Agent name slug. Default: agent.", choices: &[] },
             Param { name: "body", kind: Kind::Str, required: false, doc: "Why the claim matters, under about 300 words.", choices: &[] },
@@ -42,10 +43,11 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         name: "adsertio_attach",
         group: "core",
-        description: "Add evidence pointers to an existing claim. The file is replaced whole. A bad pointer or a duplicate is rejected and the claim is left unchanged.",
+        description: "Add evidence pointers to existing claims. For several claims, use one call: items, a list of up to 50 {id, evidence}. Every item is checked first; a bad pointer, a duplicate, or an unknown id writes nothing. Each claim file is replaced whole under its own lock. id and evidence alone still update one claim.",
         params: &[
-            Param { name: "id", kind: Kind::Str, required: true, doc: "Claim id.", choices: &[] },
-            Param { name: "evidence", kind: Kind::StrList, required: true, doc: "Pointers to add, each tool:path[#selector]. Duplicates are an error.", choices: &[] },
+            Param { name: "items", kind: Kind::ObjList, required: false, doc: "Several claims in one call, up to 50: each {id, evidence}. One item per claim. Do not also pass id or evidence.", choices: &[] },
+            Param { name: "id", kind: Kind::Str, required: false, doc: "One claim id. Required unless items is passed.", choices: &[] },
+            Param { name: "evidence", kind: Kind::StrList, required: false, doc: "Pointers to add to that claim, each tool:path[#selector]. Duplicates are an error.", choices: &[] },
         ],
         run: attach,
     },
@@ -67,6 +69,15 @@ pub static TOOLS: &[Tool] = &[
         run: check_tool,
     },
     Tool {
+        name: "adsertio_doctor",
+        group: "core",
+        description: "Diagnose problems: the store and ADSERTIO_DIR, whether the claims folder is writable, damaged claims, temp or lock files left by a dead process, git and HEAD, whether the Trammel, Chisel and Probatio files can be read, and (on Windows) path length and network drives. Returns {ok, checks: [{name, ok, detail, fix}]}; each failing check has a fix. fix: true removes leftover temp and lock files, as adsertio_check does. Does not read the claims' evidence.",
+        params: &[
+            Param { name: "fix", kind: Kind::Bool, required: false, doc: "Remove temp and lock files whose writer is gone, then report. Nothing else is changed.", choices: &[] },
+        ],
+        run: doctor,
+    },
+    Tool {
         name: "adsertio_guide",
         group: "core",
         description: "Short guide for an agent: how a verdict is decided, the pointer shapes, paging, and what to call after the conversation is compacted. Does not read the store.",
@@ -75,9 +86,84 @@ pub static TOOLS: &[Tool] = &[
     },
 ];
 
-fn claim_add(a: &Args) -> Result<Value, String> {
-    let store = Store::open()?;
-    crate::store::claims_ready(&store, false)?;
+/// The fields of one claim: the single-claim arguments, and each object in
+/// `claims`.
+const CLAIM_FIELDS: &[Param] = &[
+    Param {
+        name: "summary",
+        kind: Kind::Str,
+        required: true,
+        doc: "The claim, one line, up to 200 characters.",
+        choices: &[],
+    },
+    Param {
+        name: "evidence",
+        kind: Kind::StrList,
+        required: false,
+        doc: "Pointers, each tool:path[#selector].",
+        choices: &[],
+    },
+    Param {
+        name: "author",
+        kind: Kind::Str,
+        required: false,
+        doc: "Agent name slug. Default: agent.",
+        choices: &[],
+    },
+    Param {
+        name: "body",
+        kind: Kind::Str,
+        required: false,
+        doc: "Why the claim matters.",
+        choices: &[],
+    },
+    Param {
+        name: "id",
+        kind: Kind::Str,
+        required: false,
+        doc: "Slug. Made from the summary if absent.",
+        choices: &[],
+    },
+    Param {
+        name: "tags",
+        kind: Kind::StrList,
+        required: false,
+        doc: "Tag slugs.",
+        choices: &[],
+    },
+];
+
+/// The fields of one attach: the single-attach arguments, and each object in
+/// `items`.
+const ATTACH_FIELDS: &[Param] = &[
+    Param {
+        name: "id",
+        kind: Kind::Str,
+        required: true,
+        doc: "Claim id.",
+        choices: &[],
+    },
+    Param {
+        name: "evidence",
+        kind: Kind::StrList,
+        required: true,
+        doc: "Pointers to add.",
+        choices: &[],
+    },
+];
+
+/// A claim that passed every check and is ready to write.
+struct Draft {
+    explicit: Option<String>,
+    slug: String,
+    summary: String,
+    author: String,
+    body: String,
+    evidence: Vec<String>,
+    tags: Vec<String>,
+}
+
+fn draft(a: &Args) -> Result<Draft, String> {
     let summary = a.str("summary").unwrap_or_default();
     claim::validate_summary(summary)?;
     let mut evidence: Vec<String> = a.list("evidence").iter().map(|s| s.to_string()).collect();
@@ -111,26 +197,31 @@ fn claim_add(a: &Args) -> Result<Value, String> {
         ));
     }
     let explicit = a.str("id").map(str::to_string);
+    if let Some(id) = &explicit {
+        fsx::join_id(std::path::Path::new("."), id, 1)?;
+    }
     let slug = explicit.clone().unwrap_or_else(|| slug_from(summary));
-    let dir = store.claims_dir();
-    for n in 1..1000 {
-        if explicit.is_some() && n > 1 {
-            break;
-        }
-        let id = match &explicit {
-            Some(id) => id.clone(),
-            None if n == 1 => slug.clone(),
-            None => format!("{slug}-{n}"),
-        };
-        let path = fsx::join_id(&dir, &id, 1)?.with_extension("md");
+    Ok(Draft {
+        explicit,
+        slug,
+        summary: summary.to_string(),
+        author: author.to_string(),
+        body: body.to_string(),
+        evidence,
+        tags,
+    })
+}
+
+impl Draft {
+    fn claim(&self, id: &str) -> Result<(Claim, Vec<u8>), String> {
         let c = Claim {
-            id: id.clone(),
-            summary: summary.to_string(),
-            author: author.to_string(),
+            id: id.to_string(),
+            summary: self.summary.clone(),
+            author: self.author.clone(),
             created: fsx::now_iso(),
-            evidence: evidence.clone(),
-            tags: tags.clone(),
-            body: body.to_string(),
+            evidence: self.evidence.clone(),
+            tags: self.tags.clone(),
+            body: self.body.clone(),
         };
         let bytes = c.render().into_bytes();
         if bytes.len() as u64 > claim::MAX_CLAIM_BYTES {
@@ -139,23 +230,158 @@ fn claim_add(a: &Args) -> Result<Value, String> {
                 claim::MAX_CLAIM_BYTES
             ));
         }
+        Ok((c, bytes))
+    }
+
+    /// The candidate ids, in order: the explicit id alone, or the slug, then
+    /// `slug-2`, `slug-3`, and so on.
+    fn candidate(&self, n: usize) -> Option<String> {
+        match &self.explicit {
+            Some(id) if n == 1 => Some(id.clone()),
+            Some(_) => None,
+            None if n == 1 => Some(self.slug.clone()),
+            None if n < 1000 => Some(format!("{}-{n}", self.slug)),
+            None => None,
+        }
+    }
+}
+
+/// `label: e. Nothing was written.`, without saying it twice.
+fn nothing_written(label: &str, e: &str) -> String {
+    let e = e.trim_end_matches('.');
+    let e = e
+        .strip_suffix("; nothing was written")
+        .or_else(|| e.strip_suffix(". Nothing was written"))
+        .unwrap_or(e);
+    format!("{label}: {e}. Nothing was written.")
+}
+
+fn exists_message(id: &str) -> String {
+    format!(
+        "claim \"{id}\" already exists at .adsertio/claims/{id}.md. Use another id, or adsertio_attach to add evidence."
+    )
+}
+
+/// Write one draft with `overwrite = false`. A made-up id that is taken moves
+/// on to the next free one; `reserved` holds ids other drafts in this call
+/// will use. Returns the id written and its pointer count.
+fn write_draft(
+    dir: &std::path::Path,
+    d: &Draft,
+    reserved: &[String],
+) -> Result<(String, usize), String> {
+    for n in 1.. {
+        let Some(id) = d.candidate(n) else {
+            break;
+        };
+        if d.explicit.is_none() && reserved.contains(&id) {
+            continue;
+        }
+        let path = fsx::join_id(dir, &id, 1)?.with_extension("md");
+        let (c, bytes) = d.claim(&id)?;
         match fsx::write_atomic(&path, &bytes, false) {
-            Ok(()) => {
-                return Ok(Value::obj(vec![
-                    ("id", Value::String(id)),
-                    ("evidence", Value::uint(c.evidence.len() as u64)),
-                ]));
-            }
-            Err(e) if e.contains("already exists") && explicit.is_none() => continue,
-            Err(e) if e.contains("already exists") => {
-                return Err(format!(
-                    "claim \"{id}\" already exists at .adsertio/claims/{id}.md. Use another id, or adsertio_attach to add evidence."
-                ));
-            }
+            Ok(()) => return Ok((id, c.evidence.len())),
+            Err(e) if e.contains("already exists") && d.explicit.is_none() => continue,
+            Err(e) if e.contains("already exists") => return Err(exists_message(&id)),
             Err(e) => return Err(format!("claim \"{id}\" not written: {e}")),
         }
     }
     Err("could not find a free id; pass id".into())
+}
+
+fn claim_add(a: &Args) -> Result<Value, String> {
+    let store = Store::open()?;
+    crate::store::claims_ready(&store, false)?;
+    if a.has("claims") {
+        return claim_batch(&store, a);
+    }
+    if !a.has("summary") {
+        return Err(
+            "missing required argument: summary. To record several claims, pass claims: [{summary, evidence}, ...] in one call."
+                .into(),
+        );
+    }
+    let d = draft(a)?;
+    let (id, count) = write_draft(&store.claims_dir(), &d, &[])?;
+    Ok(Value::obj(vec![
+        ("id", Value::String(id)),
+        ("evidence", Value::uint(count as u64)),
+    ]))
+}
+
+/// `claims`: check every item, then write each with `overwrite = false`.
+/// A bad item writes nothing. A write that fails part way says which were
+/// written and which were not.
+fn claim_batch(store: &Store, a: &Args) -> Result<Value, String> {
+    if let Some(field) = CLAIM_FIELDS.iter().find(|p| a.has(p.name)) {
+        return Err(format!(
+            "pass claims, or the single-claim fields, not both (got claims and {}). Put {} inside each item.",
+            field.name, field.name
+        ));
+    }
+    let items = a.objects("claims");
+    if items.is_empty() {
+        return Err("claims is empty; pass one or more {summary, evidence} objects".into());
+    }
+    let dir = store.claims_dir();
+    let mut drafts: Vec<Draft> = Vec::new();
+    for (n, item) in items.iter().enumerate() {
+        let label = format!("claims item {}", n + 1);
+        let d = crate::tool::validate_fields("a claims item", CLAIM_FIELDS, item)
+            .and_then(|args| draft(&args))
+            .map_err(|e| nothing_written(&label, &e))?;
+        if let Some(id) = &d.explicit {
+            if let Some(first) = drafts
+                .iter()
+                .position(|o| o.explicit.as_deref() == Some(id.as_str()))
+            {
+                return Err(format!(
+                    "{label}: id \"{id}\" is also claims item {}. Each claim needs its own id. Nothing was written.",
+                    first + 1
+                ));
+            }
+            let path = fsx::join_id(&dir, id, 1)?.with_extension("md");
+            if std::fs::symlink_metadata(&path).is_ok() {
+                return Err(nothing_written(&label, &exists_message(id)));
+            }
+        }
+        d.claim(&d.slug).map_err(|e| nothing_written(&label, &e))?;
+        drafts.push(d);
+    }
+    let mut reserved: Vec<String> = drafts.iter().filter_map(|d| d.explicit.clone()).collect();
+    let mut written: Vec<String> = Vec::new();
+    for (n, d) in drafts.iter().enumerate() {
+        match write_draft(&dir, d, &reserved) {
+            Ok((id, _)) => {
+                reserved.push(id.clone());
+                written.push(id);
+            }
+            Err(e) => {
+                let rest: Vec<String> = drafts[n..]
+                    .iter()
+                    .enumerate()
+                    .map(|(k, d)| match &d.explicit {
+                        Some(id) => format!("item {} ({id})", n + k + 1),
+                        None => format!("item {}", n + k + 1),
+                    })
+                    .collect();
+                return Err(format!(
+                    "claims item {} not written: {}. Written: [{}]. Not written: [{}]. Call adsertio_claim again with only the items not written.",
+                    n + 1,
+                    e.trim_end_matches('.'),
+                    written.join(", "),
+                    rest.join(", ")
+                ));
+            }
+        }
+    }
+    Ok(Value::obj(vec![
+        (
+            "ids",
+            Value::Array(written.iter().map(|id| Value::str(id.as_str())).collect()),
+        ),
+        ("count", Value::uint(written.len() as u64)),
+    ]))
 }
 
 fn dedupe(items: Vec<String>) -> Vec<String> {
@@ -187,10 +413,8 @@ fn slug_from(summary: &str) -> String {
     }
 }
 
-fn attach(a: &Args) -> Result<Value, String> {
-    let store = Store::open()?;
-    crate::store::claims_ready(&store, false)?;
-    let id = a.str("id").unwrap_or("");
+/// The pointers one attach adds: not empty, each valid, none repeated.
+fn incoming_pointers(a: &Args) -> Result<Vec<String>, String> {
     let incoming: Vec<String> = a
         .list("evidence")
         .iter()
@@ -212,9 +436,86 @@ fn attach(a: &Args) -> Result<Value, String> {
         }
         seen.push(pointer.clone());
     }
+    Ok(incoming)
+}
+
+fn attach(a: &Args) -> Result<Value, String> {
+    let store = Store::open()?;
+    crate::store::claims_ready(&store, false)?;
+    if a.has("items") {
+        return attach_batch(&store, a);
+    }
+    for field in ["id", "evidence"] {
+        if !a.has(field) {
+            return Err(format!(
+                "missing required argument: {field}. To add pointers to several claims, pass items: [{{id, evidence}}, ...] in one call."
+            ));
+        }
+    }
+    let id = a.str("id").unwrap_or("");
+    let incoming = incoming_pointers(a)?;
+    attach_one(&store, id, &incoming, true)
+}
+
+/// `items`: check every item against its claim, then attach each under that
+/// claim's own lock. A bad item writes nothing.
+fn attach_batch(store: &Store, a: &Args) -> Result<Value, String> {
+    if let Some(field) = ATTACH_FIELDS.iter().find(|p| a.has(p.name)) {
+        return Err(format!(
+            "pass items, or id and evidence, not both (got items and {}). Put {} inside each item.",
+            field.name, field.name
+        ));
+    }
+    let items = a.objects("items");
+    if items.is_empty() {
+        return Err("items is empty; pass one or more {id, evidence} objects".into());
+    }
+    let mut plan: Vec<(String, Vec<String>)> = Vec::new();
+    for (n, item) in items.iter().enumerate() {
+        let label = format!("attach item {}", n + 1);
+        let args = crate::tool::validate_fields("an attach item", ATTACH_FIELDS, item)
+            .map_err(|e| nothing_written(&label, &e))?;
+        let id = args.str("id").unwrap_or("").to_string();
+        let incoming = incoming_pointers(&args).map_err(|e| nothing_written(&label, &e))?;
+        if let Some(first) = plan.iter().position(|(other, _)| *other == id) {
+            return Err(format!(
+                "{label}: claim \"{}\" is also attach item {}. Put all of its pointers in one item. Nothing was written.",
+                fsx::clip(&id, 60),
+                first + 1
+            ));
+        }
+        attach_one(store, &id, &incoming, false).map_err(|e| nothing_written(&label, &e))?;
+        plan.push((id, incoming));
+    }
+    let mut done: Vec<Value> = Vec::new();
+    let mut written: Vec<&str> = Vec::new();
+    for (n, (id, incoming)) in plan.iter().enumerate() {
+        match attach_one(store, id, incoming, true) {
+            Ok(v) => {
+                done.push(v);
+                written.push(id);
+            }
+            Err(e) => {
+                let rest: Vec<&str> = plan[n..].iter().map(|(id, _)| id.as_str()).collect();
+                return Err(format!(
+                    "attach item {} not written: {}. Updated: [{}]. Not updated: [{}]. Call adsertio_attach again with only the items not updated.",
+                    n + 1,
+                    e.trim_end_matches('.'),
+                    written.join(", "),
+                    rest.join(", ")
+                ));
+            }
+        }
+    }
+    Ok(Value::obj(vec![("claims", Value::Array(done))]))
+}
+
+/// Add `incoming` to claim `id`. With `write` false this only checks, without
+/// the lock, that the attach would succeed now.
+fn attach_one(store: &Store, id: &str, incoming: &[String], write: bool) -> Result<Value, String> {
     let path = fsx::join_id(&store.claims_dir(), id, 1)?.with_extension("md");
     let lock = store.claims_dir().join(format!(".{id}.md.lock"));
-    fsx::with_claim_lock(&lock, || {
+    let body = || {
         let meta = match std::fs::symlink_metadata(&path) {
             Ok(meta) => meta,
             Err(_) => {
@@ -230,7 +531,7 @@ fn attach(a: &Args) -> Result<Value, String> {
         let text = fsx::read_strict(&path)?;
         let mut claim = Claim::parse(id, &text)
             .map_err(|e| format!("corrupt claim {id} ({}): {e}", path.display()))?;
-        for pointer in &incoming {
+        for pointer in incoming {
             if claim.evidence.iter().any(|kept| kept == pointer) {
                 return Err(format!(
                     "evidence \"{}\" is already on claim \"{id}\"",
@@ -253,8 +554,10 @@ fn attach(a: &Args) -> Result<Value, String> {
                 claim::MAX_CLAIM_BYTES
             ));
         }
-        fsx::write_atomic(&path, &bytes, true)
-            .map_err(|e| format!("claim \"{id}\" not updated: {e}"))?;
+        if write {
+            fsx::write_atomic(&path, &bytes, true)
+                .map_err(|e| format!("claim \"{id}\" not updated: {e}"))?;
+        }
         Ok(Value::obj(vec![
             ("id", Value::str(&claim.id)),
             ("evidence", Value::uint(claim.evidence.len() as u64)),
@@ -263,7 +566,12 @@ fn attach(a: &Args) -> Result<Value, String> {
                 Value::Array(incoming.iter().map(|p| Value::str(p.as_str())).collect()),
             ),
         ]))
-    })
+    };
+    if write {
+        fsx::with_claim_lock(&lock, body)
+    } else {
+        body()
+    }
 }
 
 fn ls(a: &Args) -> Result<Value, String> {
@@ -466,6 +774,10 @@ fn json_escape(text: &str) -> String {
     out
 }
 
+fn doctor(a: &Args) -> Result<Value, String> {
+    Ok(crate::doctor::run(a.bool("fix") == Some(true)))
+}
+
 fn check_tool(_a: &Args) -> Result<Value, String> {
     store_check()
 }
@@ -473,20 +785,52 @@ fn check_tool(_a: &Args) -> Result<Value, String> {
 pub fn store_check() -> Result<Value, String> {
     let store = Store::open()?;
     crate::store::claims_ready(&store, false)?;
+    let found = claim_problems(&store, true, true)?;
+    if !found.problems.is_empty() {
+        return Err(found.problems.join("\n"));
+    }
+    Ok(Value::obj(vec![
+        ("ok", Value::Bool(true)),
+        ("claims", Value::uint(found.claims as u64)),
+        (
+            "stray_temp_files",
+            Value::Array(found.strays.into_iter().map(Value::String).collect()),
+        ),
+    ]))
+}
+
+/// What `check` finds in the claims folder.
+pub struct Findings {
+    pub claims: usize,
+    pub problems: Vec<String>,
+    /// Temp files still there after the sweep (a live writer's, or all of
+    /// them when `clean` is false).
+    pub strays: Vec<String>,
+}
+
+/// The claim checks `check` and `doctor` share. With `clean`, abandoned
+/// temp files and locks are removed first, as `check` does. With
+/// `evidence`, every pointer is read once for a malformed timestamp or commit.
+/// `Err` is a claim that could not be read at all.
+pub fn claim_problems(store: &Store, clean: bool, evidence: bool) -> Result<Findings, String> {
     let mut problems = Vec::new();
     let mut strays = Vec::new();
     let dir = store.claims_dir();
-    fsx::sweep_abandoned_temps(&dir);
+    if clean {
+        fsx::sweep_abandoned_temps(&dir);
+    }
     if let Ok(rd) = std::fs::read_dir(&dir) {
         for entry in rd.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             let path = entry.path();
             if name.starts_with('.') && name.contains(".tmp-") {
-                strays.push(Value::String(name));
+                strays.push(name);
                 continue;
             }
             if name.starts_with('.') && name.ends_with(".md.lock") {
-                fsx::break_abandoned_lock(&path);
+                if clean {
+                    fsx::break_abandoned_lock(&path);
+                }
                 continue;
             }
             if fsx::is_work_file(&name) || fsx::is_os_file(&name) {
@@ -508,7 +852,8 @@ pub fn store_check() -> Result<Value, String> {
             }
         }
     }
-    let claims = claim::load_all(&store)?;
+    strays.sort();
+    let claims = claim::load_all_with(store, clean)?;
     for claim in &claims {
         if !crate::fresh::valid_created(&claim.created) {
             problems.push(format!(
@@ -517,28 +862,27 @@ pub fn store_check() -> Result<Value, String> {
             ));
         }
     }
-    let project = store.project.clone();
-    crate::cache::with_cache(|| {
-        for claim in &claims {
-            for pointer in &claim.evidence {
-                let evidence = verdict::read_evidence(&project, pointer);
-                if evidence.malformed {
-                    problems.push(format!(
-                        "claim \"{}\" pointer {} has a malformed timestamp or commit",
-                        claim.id, evidence.pointer
-                    ));
+    if evidence {
+        let project = store.project.clone();
+        crate::cache::with_cache(|| {
+            for claim in &claims {
+                for pointer in &claim.evidence {
+                    let evidence = verdict::read_evidence(&project, pointer);
+                    if evidence.malformed {
+                        problems.push(format!(
+                            "claim \"{}\" pointer {} has a malformed timestamp or commit",
+                            claim.id, evidence.pointer
+                        ));
+                    }
                 }
             }
-        }
-    });
-    if !problems.is_empty() {
-        return Err(problems.join("\n"));
+        });
     }
-    Ok(Value::obj(vec![
-        ("ok", Value::Bool(true)),
-        ("claims", Value::uint(claims.len() as u64)),
-        ("stray_temp_files", Value::Array(strays)),
-    ]))
+    Ok(Findings {
+        claims: claims.len(),
+        problems,
+        strays,
+    })
 }
 
 fn guide(_a: &Args) -> Result<Value, String> {
@@ -552,7 +896,19 @@ fn guide(_a: &Args) -> Result<Value, String> {
         (
             "after_compaction",
             Value::str(
-                "Call adsertio_ls, then adsertio_view for the ids that matter. Do not repeat a verdict from memory.",
+                "Call adsertio_view with states [\"unverified\", \"refuted\"] and compact true for the open claims (adsertio hook prints a session-start hook that does this), then adsertio_view for the ids that matter. Do not repeat a verdict from memory.",
+            ),
+        ),
+        (
+            "stale_after_commit",
+            Value::str(
+                "A Chisel or Trammel pass recorded before a commit is stale once HEAD moves. Rerun the tests at HEAD (for example chisel run -- <test command>) after committing, then view again.",
+            ),
+        ),
+        (
+            "problems",
+            Value::str(
+                "adsertio_doctor reports what is wrong with the store, git, or the evidence files, each with a fix.",
             ),
         ),
         (
@@ -580,7 +936,7 @@ fn guide(_a: &Args) -> Result<Value, String> {
         (
             "writes",
             Value::str(
-                "adsertio_claim never overwrites. Add pointers with adsertio_attach. A repeated pointer is an error and the file is left unchanged. A claim holds at most 50 pointers. The body is at most 20000 bytes. The claim file is at most 262144 bytes. Duplicate tags and evidence on a new claim are kept once.",
+                "Record all claims in one call: adsertio_claim with claims, a list of up to 50 {summary, evidence, id?}. Add pointers to several claims in one call: adsertio_attach with items, a list of {id, evidence}. Every item is checked first and a bad one writes nothing. adsertio_claim never overwrites. A repeated pointer is an error and the file is left unchanged. A claim holds at most 50 pointers. The body is at most 20000 bytes. The claim file is at most 262144 bytes. Duplicate tags and evidence on a new claim are kept once.",
             ),
         ),
     ]))

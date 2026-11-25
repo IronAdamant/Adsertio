@@ -47,14 +47,16 @@ cargo build --release --locked
 - `src/tool.rs` tool table types and argument validation. `src/tools.rs` the tools.
 - `src/mcp.rs` the server. `src/groups.rs` the `agent-tools` block.
 - `src/claim.rs` claims and pointers. `src/store.rs` store lookup. `src/cli.rs`
-  the command line.
+  the command line and the flag parser.
+- `src/hook.rs` the `adsertio hook` snippets and `view --wrap`. `src/doctor.rs`
+  the `adsertio doctor` checks.
 - `.github/workflows/release.yml` builds the GitHub release when a `v*` tag is pushed. No npm, no crates.io.
 - `tests/hostile_input.rs`, `tests/claims_and_evidence.rs`,
   `tests/cli_and_groups.rs`, `tests/reader.rs`, `tests/trammel.rs`,
   `tests/chisel.rs`, `tests/probatio.rs`, `tests/fresh.rs`, `tests/attach_ls.rs`,
   `tests/load.rs`, `tests/fixes.rs`, `tests/perf.rs`, `tests/ux.rs`,
   `tests/review3.rs`, `tests/review4.rs`, `tests/review5.rs`,
-  `tests/zero_deps.rs`:
+  `tests/v130.rs`, `tests/zero_deps.rs`:
   the failure modes the design avoids. Keep them passing. `tests/common/mod.rs`
   holds shared helpers. Fixtures in `tests/fixtures/probatio/real` and
   `tests/fixtures/chisel/real-*` were written by the real tools; prefer that

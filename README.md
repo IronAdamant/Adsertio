@@ -67,6 +67,14 @@ adsertio view                          # the verdict for every claim
 
 The claim id comes from the summary (`retry-step-passed`), or you can pick one with `--id`. Evidence paths are relative to the project, which is the folder holding `.adsertio/`.
 
+To record several claims, pass them all at once. Each item has the same fields as one claim (`summary`, and optionally `evidence`, `id`, `author`, `body`, `tags`), and a call takes up to 50:
+
+```sh
+adsertio claim --claims '[{"summary":"Retry step passed","evidence":["trammel:.trammel/store#plan-1/step-1"]},{"summary":"Parser test passes","id":"parser","evidence":["chisel:.chisel/store#test:tests/a.rs:t1"]}]'
+```
+
+Every item is checked before anything is written. If one is bad (a bad pointer, an id that already exists, two items with the same id), nothing is written and the error names the item. Quoting JSON differs between cmd, PowerShell and Git Bash, so on Windows put the array in a file and pass `--claims-file claims.json`. `adsertio attach --items '[{"id":"a","evidence":[...]}]'` (or `--items-file`) adds pointers to several claims the same way.
+
 `adsertio view --compact` gives a short answer (trimmed here):
 
 ```json
@@ -92,6 +100,8 @@ Other commands:
 - `adsertio ls` lists claims (id, summary, number of pointers) without reading any evidence.
 - `adsertio check` reads every claim and fails if any is damaged.
 - `adsertio guide` prints a short reminder of pointer shapes and the verdict rule.
+- `adsertio doctor` says what is wrong with the set-up, and how to fix it (below).
+- `adsertio hook --host claude|cursor|generic` prints a hook to paste into the host's settings (below).
 
 Each flag is given once, except `--evidence`, `--tags` and `--states`, which repeat. An unknown or repeated flag is a usage error (exit code 2). A value that starts with `--` goes after `=` (`--summary=--fast`) or after a lone `--` (`--summary -- --fast`).
 
@@ -136,6 +146,8 @@ One exception: Probatio records no time or commit, so a Probatio pass is never s
 
 The only outside program Adsertio runs is `git rev-parse HEAD`, for the commit check.
 
+When a Chisel or Trammel pass is stale only because its commit is not `HEAD` (the usual case after testing uncommitted work and then committing), the detail ends with the fix: rerun the tests at `HEAD`, for example `chisel run -- <test command>`.
+
 ### Pointer states
 
 | State | Meaning |
@@ -176,14 +188,49 @@ For Claude Code (`.mcp.json`) or Cursor (`.cursor/mcp.json`):
 
 | Tool | Does |
 |---|---|
-| `adsertio_claim` | Record a claim. Never overwrites one. |
-| `adsertio_attach` | Add pointers to an existing claim. A bad or duplicate pointer writes nothing. |
+| `adsertio_claim` | Record claims. Pass `claims`, a list of up to 50, to record them all in one call. Never overwrites one. |
+| `adsertio_attach` | Add pointers to existing claims. Pass `items`, a list of `{id, evidence}`, for several claims in one call. A bad or duplicate pointer writes nothing. |
 | `adsertio_view` | The verdict and the state of every pointer. |
 | `adsertio_ls` | Id, summary, and pointer count. No verdict. |
 | `adsertio_check` | Fail on any damaged claim. Also clears a lock or temp file left by a writer that is gone. |
+| `adsertio_doctor` | What is wrong with the store, git, or the evidence files, each with a fix. |
 | `adsertio_guide` | Pointer shapes, the verdict rule, paging, and what to do after the conversation is compacted. |
 
 Each tool is also a CLI command without the `adsertio_` prefix.
+
+Each MCP call is one agent turn, and every turn reads the whole conversation again, so an agent should record all its claims in one `adsertio_claim` call and attach in one `adsertio_attach` call. The tool descriptions say so.
+
+## After compaction: the session hook
+
+When a conversation is compacted, an agent can remember a verdict that is no longer true. `adsertio hook` prints a hook that runs, at session start and after compaction:
+
+```sh
+adsertio view --compact --states unverified --states refuted
+```
+
+so the agent sees the claims that are not verified and reads them again instead of repeating a verdict from memory.
+
+- `--host claude` prints JSON for `.claude/settings.json`: a `SessionStart` hook whose matcher is `startup|resume|clear|compact`, and a `SubagentStart` hook that gives a sub-agent the same list. It uses the exec form (`"command": "adsertio"` with an `args` list), which starts the program with no shell, so it works the same on Windows, macOS and Linux.
+- `--host cursor` prints JSON for `.cursor/hooks.json`. Its command adds `--wrap cursor`, which prints the view inside the `additional_context` JSON Cursor reads. Cursor's `preCompact` cannot put text back, so after compaction run the view again yourself.
+- `--host generic` (the default) prints only the command.
+
+`adsertio` must be on `PATH`. The command has no shell syntax (no `&&`, quotes or `~`). Adsertio prints the snippet; it does not edit your settings.
+
+## When something is wrong: doctor
+
+`adsertio doctor` (or the `adsertio_doctor` tool) runs a few cheap checks and prints JSON: `ok`, and `checks`, each `{name, ok, detail, fix}`. Every failing check has a `fix` sentence. It checks:
+
+- the version and platform
+- where the store is, and `ADSERTIO_DIR`
+- that the claims folder takes a new file (it writes and removes a probe the way a new claim is written)
+- the claim count, and any damaged claim
+- temp or lock files left by a process that is gone
+- `git` on `PATH`, and what `git rev-parse HEAD` says
+- `.trammel/store`, `.chisel/store` and `.probatio`: there or not, size against the read limits, and whether Adsertio can read them
+- that `adsertio-mcp` sits next to `adsertio`
+- on Windows, how close the store path is to the 260-character limit, and whether it is on a network drive
+
+It exits 0 when every check passes and 1 when one fails. Doctor only reads. `doctor --fix` also removes the temp and lock files a dead process left, which `check` already does, and lists them in `fixed`. It never repairs a claim and never touches another tool's files.
 
 The server has one tool group, `core`, which is always on. You can still name it in the `agent-tools` block of a project's AGENTS.md; see [AGENTS.snippet.md](AGENTS.snippet.md). A mistake in that line falls back to `core` and says why.
 
@@ -192,6 +239,17 @@ The server has one tool group, `core`, which is always on. You can still name it
 adsertio: tools core
 ```
 ````
+
+## Upgrading from 1.2
+
+1.3.0 changes the tool surface; there were no users to keep compatible with, so the cleaner shape won.
+
+- `adsertio_claim` takes `claims` (a list) as well as the single-claim fields. Its schema no longer marks `summary` as required, because a batch call has no top-level summary. A call with neither is still an error, and says to pass `summary` or `claims`.
+- `adsertio_attach` takes `items` as well as `id` and `evidence`. Its schema no longer marks `id` and `evidence` as required, for the same reason.
+- A batch call replies `{ids, count}` (claim) or `{claims: [{id, evidence, added}]}` (attach). A single call replies as before.
+- A new tool, `adsertio_doctor`, is in the `core` group, so `tools/list` has seven tools.
+- The detail of a pass that is stale because its commit is not `HEAD` now ends with `; fix: rerun the tests at HEAD (...)`.
+- `adsertio_guide` has two new fields, `stale_after_commit` and `problems`, and its `after_compaction` and `writes` text changed.
 
 ## Built to fail loudly
 
@@ -228,7 +286,7 @@ cargo build --release --locked
 
 `Cargo.toml` has no dependencies; `tests/zero_deps.rs` checks that, and `Cargo.lock` holds one package.
 
-Pushing a tag named `v*` (for example `v1.2.2`) builds the release archives and `SHA256SUMS` and attaches them to a GitHub release. The v1.0.0 release used shorter archive names, such as `adsertio-linux-x64.tar.gz`.
+Pushing a tag named `v*` (for example `v1.3.0`) builds the release archives and `SHA256SUMS` and attaches them to a GitHub release. The v1.0.0 release used shorter archive names, such as `adsertio-linux-x64.tar.gz`.
 
 ## Licence
 

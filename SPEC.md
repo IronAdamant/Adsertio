@@ -172,7 +172,10 @@ SQLite reader. The live stores are JSON.
   `test_passes` when it could not read HEAD. That is no commit recorded, not
   a malformed one: no commit is checked, the timestamp rule still applies,
   `check` does not fail on it, and the detail says Chisel recorded no commit. A mismatch is `stale`, and the detail
-  names both commits. A prefix of at least 7 hex digits matches. If git is
+  names both commits, then ends with a fix: `; fix: rerun the tests at HEAD
+  (for example chisel run -- <test command>)` for Chisel, or `(for example
+  verify_step again for that step)` for Trammel. This is the usual case after
+  an agent tests uncommitted work and then commits. A prefix of at least 7 hex digits matches. If git is
   missing, or the folder is not a repository, the pointer is `stale` rather
   than verified.
 - No timestamp and no commit can still pass. The detail says `no timestamp`.
@@ -205,12 +208,45 @@ file fails the whole view and the whole list. It is not left out.
 
 - `adsertio_claim` `{summary, evidence?, author?, body?, id?, tags?}` returns
   `{id, evidence}`. Without `id`, one is made from the summary. Never overwrites.
+- `adsertio_claim` `{claims}` records several claims in one call and returns
+  `{ids, count}`, the ids in the order of the items. `claims` is a list of 1
+  to 50 objects, each with the fields of one claim (`summary` required;
+  `evidence`, `id`, `author`, `body`, `tags` optional). Passing `claims` and
+  any single-claim field together is an error. Semantics:
+  1. Every item is checked before anything is written: its fields (an unknown
+     field is an error), summary, pointers, author, tags, body, id, and size.
+     An explicit id must not repeat another item's id and must not name a
+     claim that exists. Any failure writes nothing, and the error names the
+     item by number (`claims item 2: ...`) and says nothing was written.
+  2. The items are then written in order, each with `overwrite = false`. An
+     item without `id` takes its summary's slug, or the next free `slug-<n>`,
+     skipping ids already on disk and ids other items use.
+  3. If a write fails part way (another process created the same explicit id
+     after the check), the call is an error that names the failed item and
+     lists the ids written and the items not written. Nothing written is
+     undone, and the items after the failure are not tried.
 - `adsertio_attach` `{id, evidence}` adds pointers to an existing claim and
   returns `{id, evidence, added}`. `evidence` is still the new count. `added`
   is the pointers this call wrote, in order. A bad pointer, an empty list, or a
   duplicate (in the request, or already on the claim) is an error and writes
   nothing. Only that claim file is replaced. A claim holds at most 50 pointers.
   Attach will not go past that.
+- `adsertio_attach` `{items}` attaches to several claims in one call and
+  returns `{claims: [{id, evidence, added}]}`. `items` is a list of 1 to 50
+  `{id, evidence}`, one item per claim (two items naming one claim is an
+  error). Every item is checked against its claim first, as a single attach
+  checks it; any failure writes nothing and names the item
+  (`attach item 2: ...`). Then each claim is updated under its own lock, and
+  checked again while locked. If one fails then (another attach added the
+  same pointer in between), the error lists the claims updated and the ones
+  not updated.
+- The schema does not mark `summary` (claim) or `id` and `evidence` (attach)
+  as required, since a batch call has none of them at the top level. A call
+  with neither form is an error that names both.
+- The CLI takes `--claims JSON` or `--claims-file PATH`, and `--items JSON` or
+  `--items-file PATH`: the same list as JSON text, or a file holding it (up
+  to 4 MiB, UTF-8, a leading byte order mark ignored). Giving both, or one
+  twice, is a usage error (exit 2), as is text that is not a JSON array.
 - `adsertio_check` `{}` is the same read as `adsertio check`. It fails on a
   damaged claim, a file in `claims` that is not `slug.md`, a `created` time
   that is not `YYYY-MM-DDTHH:MM:SSZ`, or a pass whose timestamp or commit is
@@ -264,6 +300,7 @@ file fails the whole view and the whole list. It is not left out.
   forward slashes inside the project.
 - `adsertio_guide` `{}` returns pointer shapes, the verdict rule, paging, and
   what to call after compaction. It does not read the store.
+- `adsertio_doctor` `{fix?}` returns `{ok, checks, fixed?}`. See section 7.
 
 One `view` or `check` call reads a given Trammel snapshot, Chisel snapshot, or
 Probatio `results/` directory once, indexes the rows a selector needs, and
@@ -274,7 +311,66 @@ Arguments are checked against the schema: unknown arguments, wrong types,
 missing required arguments, and values outside an `enum` are errors with
 `isError: true`. Group: `core` only.
 
-## 7. Protocol behaviour
+## 7. Hook and doctor
+
+**`adsertio hook --host claude|cursor|generic`** (CLI only; default
+`generic`) prints a snippet for a person to paste. It takes only `--host`,
+under the same flag rules as every command: an unknown, repeated, or empty
+flag, or an unknown host, is a usage error. Adsertio does not install the
+snippet. Every snippet runs
+
+```
+adsertio view --compact --states unverified --states refuted
+```
+
+which lists only the claims that are not verified, so after compaction the
+agent reads them again instead of repeating a verdict from memory. The
+command has no shell syntax (no `&&`, `||`, quotes, `~`, or variables).
+
+- `claude`: JSON for `.claude/settings.json`. A `SessionStart` entry with
+  matcher `startup|resume|clear|compact`, and a `SubagentStart` entry (matcher
+  `*`) whose command adds `--wrap claude-subagent`. Both use the exec form,
+  `"command": "adsertio"` with an `args` list, which runs the program with no
+  shell, the same under cmd, PowerShell and Git Bash.
+- `cursor`: JSON for `.cursor/hooks.json`, a `sessionStart` command that adds
+  `--wrap cursor`. Cursor's `preCompact` cannot add text, so the snippet says
+  to run the view again after compaction.
+- `generic`: the command line alone.
+
+`adsertio view --wrap cursor|claude-subagent` (CLI only) prints the view's
+JSON as text inside the JSON the host reads: `{"additional_context": ...}`
+for Cursor, and `{"hookSpecificOutput": {"hookEventName": "SubagentStart",
+"additionalContext": ...}}` for a Claude Code sub-agent. The text starts with
+one line saying these are the claims that are not verified.
+
+**`adsertio doctor [--fix]`** and the MCP tool `adsertio_doctor` `{fix?}`
+return `{ok, checks, fixed?}`. Each check is `{name, ok, detail, fix}`, and
+`fix` is a sentence when the check fails, null when it passes. `ok` is true
+when every check passes. The CLI prints the JSON either way and exits 0 when
+`ok` is true, 1 when not. The MCP tool returns the report as a normal result
+(`isError` false); `ok` carries the answer. The checks, in order:
+
+| Name | Fails when |
+|---|---|
+| `version` | never; the version and platform |
+| `store` | no store is found, or `ADSERTIO_DIR` names one that does not exist, or `claims` is not a real folder. The detail says whether `ADSERTIO_DIR` is set |
+| `store_writable` | a probe file cannot be written with `fsx::write_atomic` (`overwrite = false`, a hard link, as a new claim is) and removed |
+| `claims` | a claim is damaged, a file in `claims` is not `slug.md`, or a `created` time is malformed. Evidence is not read |
+| `leftover_files` | a temp file, attach lock, or break guard is left by a writer that is gone. A live writer's files are listed and pass |
+| `path_length` | Windows only: the claims folder path plus the longest name Adsertio writes there (104 characters) reaches 260 |
+| `network_drive` | Windows only, when the drive type can be read: the store is on a network drive or a UNC path |
+| `git` | `git` is not on `PATH`, or `git rev-parse HEAD` fails in the project |
+| `trammel_store`, `chisel_store` | the file is over the 1 GiB limit, or present and not readable by Adsertio (read the way a pointer reads it, shared lock included) |
+| `probatio` | `.probatio` is not a folder, or a run folder in it (one holding `results/`, `run.json`, `tally.json` or `ledger.json`, up to two levels down, at most 50) is `unreadable` |
+| `binaries` | `adsertio` and `adsertio-mcp` are not both in the folder of the running program |
+
+Without a store, the store checks are left out and the rest run in the
+working folder. Doctor reads only, except the probe file. `--fix` (or
+`fix: true`) first removes the temp files, abandoned locks, and stale break
+guards whose writer is gone, using the same rules as `check`, then runs the
+checks and lists the removed names in `fixed`. It changes nothing else.
+
+## 8. Protocol behaviour
 
 Newline-delimited JSON-RPC 2.0 on stdio.
 
@@ -290,7 +386,7 @@ Newline-delimited JSON-RPC 2.0 on stdio.
 | A tool failure | a result with `isError: true` |
 | A tool that panics | a result with `isError: true`; the server continues |
 
-## 8. Not in this version
+## 9. Not in this version
 
 - Worktree overlays under `.chisel/overlays/`.
 - A verdict that ledger bugs were re-caught. `#ledger` only counts entries.

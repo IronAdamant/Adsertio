@@ -1,10 +1,67 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
+
+Same claim format as 1.2.2. This release cuts agent turns: each MCP call is
+one turn, and each turn reads the whole context again, so claims and attaches
+now go in one call. It also adds a session hook and a doctor for set-up
+problems, with Windows in mind.
+
+Added:
+
+- Batch claims. `adsertio_claim` takes `claims`, a list of up to 50 objects
+  with the fields of one claim. Every item is checked first (fields, ids,
+  repeated ids in the batch, ids already on disk, pointers, sizes); one bad
+  item writes nothing and the error names it. Items are then written with
+  `overwrite = false`; if a write fails part way, the error lists exactly
+  which ids were written and which items were not. The reply is
+  `{ids, count}`. CLI: `adsertio claim --claims '<json array>'` or
+  `--claims-file PATH` (a byte order mark from Windows PowerShell is
+  ignored).
+- Batch attach. `adsertio_attach` takes `items`, a list of `{id, evidence}`,
+  with the same all-or-nothing check. Each claim is updated under its own
+  lock. CLI: `--items` or `--items-file`.
+- The tool descriptions, the server instructions, and `adsertio_guide` tell
+  an agent to record all claims in one call.
+- `adsertio hook --host claude|cursor|generic` prints a hook that runs
+  `adsertio view --compact --states unverified --states refuted` at session
+  start and after compaction, so the agent sees the claims that are not
+  verified instead of repeating verdicts from memory. The Claude Code
+  snippet uses the exec form (`command` plus `args`, no shell), so it runs
+  the same on Windows, and adds a `SubagentStart` entry for sub-agents.
+- `adsertio view --wrap cursor|claude-subagent` (CLI only) prints the view
+  inside the JSON those hooks read.
+- `adsertio doctor [--fix]` and the `adsertio_doctor` tool: read-only checks
+  of the version and platform, the store and `ADSERTIO_DIR`, a writable
+  claims folder, damaged claims, files left by a dead writer, git and HEAD,
+  the Trammel, Chisel and Probatio files (present, size, readable), the
+  `adsertio-mcp` binary next to `adsertio`, and on Windows the path length
+  and network drives. Each failing check has a `fix`. Exit 1 when a check
+  fails. `--fix` removes only what `check` already removes.
+- A Chisel or Trammel pass that is stale only because its commit is not
+  HEAD now ends its detail with a fix: rerun the tests at HEAD (for example
+  `chisel run -- <test command>`). This happens when an agent tests
+  uncommitted work and then commits.
+
+Fixed:
 
 - On Windows, two attaches racing on one claim could fail with "cannot lock
   the claim: Access is denied". Windows reports that while another process
   is deleting the lock file. It now counts as a held lock and is retried.
+
+Breaking changes (there were no users yet):
+
+- The `adsertio_claim` schema no longer marks `summary` as required, and the
+  `adsertio_attach` schema no longer marks `id` and `evidence` as required,
+  because a batch call has none of them at the top level. A call with
+  neither form is still an error, with a message naming both.
+- `tools/list` has a seventh tool, `adsertio_doctor`, in the `core` group.
+- The stale detail for a commit that is not HEAD has a new suffix,
+  `; fix: rerun the tests at HEAD (...)`.
+- `adsertio_guide` has new fields (`stale_after_commit`, `problems`), and its
+  `after_compaction` and `writes` text changed.
+- A single `adsertio_claim` with no arguments now says to pass `summary` or
+  `claims`, instead of only `missing required argument: summary`.
 
 ## 1.2.2
 
