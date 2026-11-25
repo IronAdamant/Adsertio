@@ -87,6 +87,18 @@ pub fn read_trammel(project: &Path, rel: &str) -> Result<Snapshot, ReadError> {
     }
 }
 
+/// One JSON file inside the project: size cap, SQLite header, UTF-8, then
+/// the strict parser. A folder is [`ReadError::Unreadable`].
+pub fn read_json(project: &Path, rel: &str, tool: &str) -> Result<Value, ReadError> {
+    let path = open_contained(project, rel)?;
+    let bytes = read_bytes(&path, rel)?;
+    if is_sqlite(&bytes) {
+        return Err(ReadError::Unreadable(sqlite_message(tool)));
+    }
+    let text = decode(&bytes, rel)?;
+    parse_json(&text, rel)
+}
+
 /// One Chisel snapshot. Compact `test_edges` and `blame` tables are expanded
 /// to plain rows. Wrong magic, or a compact table that will not expand, is
 /// [`ReadError::Unreadable`].

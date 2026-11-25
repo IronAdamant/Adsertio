@@ -10,6 +10,7 @@ pub mod groups;
 pub mod json;
 pub mod lock;
 pub mod mcp;
+pub mod probatio;
 pub mod read;
 pub mod store;
 pub mod tool;

@@ -25,6 +25,9 @@ pub enum State {
     Unreadable,
     /// The file reads fine but no adapter for its tool exists yet.
     NoAdapter,
+    /// The file was read and it is neither a pass nor a fail: a mutation
+    /// timeout, a run with no kill and no survivor, or an unchecked ledger.
+    Inconclusive,
 }
 
 impl State {
@@ -35,6 +38,7 @@ impl State {
             State::Missing => "missing",
             State::Unreadable => "unreadable",
             State::NoAdapter => "no_adapter",
+            State::Inconclusive => "inconclusive",
         }
     }
 }
@@ -90,6 +94,9 @@ pub fn read_evidence(project: &Path, pointer: &str) -> Evidence {
     }
     if tool == "chisel" {
         return crate::chisel::evaluate(project, pointer);
+    }
+    if tool == "probatio" {
+        return crate::probatio::evaluate(project, pointer);
     }
     let path = rest.split('#').next().unwrap_or("");
     let file = match fsx::project_file(project, path) {
@@ -201,6 +208,15 @@ mod tests {
             Verdict::Refuted
         );
         assert_eq!(combine(&[State::Unreadable]), Verdict::Unverified);
+        assert_eq!(combine(&[State::Inconclusive]), Verdict::Unverified);
+        assert_eq!(
+            combine(&[State::Pass, State::Inconclusive]),
+            Verdict::Unverified
+        );
+        assert_eq!(
+            combine(&[State::Fail, State::Inconclusive]),
+            Verdict::Refuted
+        );
     }
 
     #[test]
@@ -213,7 +229,7 @@ mod tests {
         assert_eq!(read_evidence(&d, "chisel:ok.json").state, State::Unreadable);
         assert_eq!(
             read_evidence(&d, "probatio:ok.json").state,
-            State::NoAdapter
+            State::Unreadable
         );
         assert_eq!(read_evidence(&d, "chisel:nope.json").state, State::Missing);
         assert_eq!(read_evidence(&d, "chisel:../x").state, State::Unreadable);
