@@ -24,7 +24,15 @@ Standard library only, no Cargo crates. One binary: the `adsertio` CLI and the `
 
 ## Install
 
-Build it (Rust 1.83 or newer):
+A tag named `v*` (for example `v1.0.0`) builds the release binaries and attaches them to a GitHub release, with `SHA256SUMS`:
+
+- Linux x64 (`adsertio-linux-x64.tar.gz`)
+- macOS x64 and arm64 (`adsertio-macos-x64.tar.gz`, `adsertio-macos-arm64.tar.gz`)
+- Windows x64 (`adsertio-windows-x64.zip`)
+
+Each archive contains `adsertio` and `adsertio-mcp` (the same program). Check the file against `SHA256SUMS` before you run it. Adsertio is not on crates.io, and there is no npm package.
+
+Or build it (Rust 1.83 or newer):
 
 ```sh
 git clone https://github.com/IronAdamant/Adsertio
@@ -32,7 +40,7 @@ cd Adsertio
 cargo build --release --locked
 ```
 
-That writes `target/release/adsertio` and `target/release/adsertio-mcp`. Release binaries and an npm package are not published. Adsertio is not on crates.io.
+That writes `target/release/adsertio` and `target/release/adsertio-mcp`.
 
 ## Usage
 

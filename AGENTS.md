@@ -44,6 +44,7 @@ cargo build --release --locked
 - `src/mcp.rs` the server. `src/groups.rs` the `agent-tools` block.
 - `src/claim.rs` claims and pointers. `src/store.rs` store lookup. `src/cli.rs`
   the command line.
+- `.github/workflows/release.yml` builds the GitHub release when a `v*` tag is pushed. No npm, no crates.io.
 - `tests/hostile_input.rs`, `tests/claims_and_evidence.rs`,
   `tests/cli_and_groups.rs`, `tests/reader.rs`, `tests/trammel.rs`,
   `tests/chisel.rs`, `tests/probatio.rs`, `tests/fresh.rs`, `tests/attach_ls.rs`:
