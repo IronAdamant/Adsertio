@@ -1,6 +1,6 @@
 //! File helpers: atomic writes with cleanup, strict reads, path guards.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,6 +20,76 @@ impl Drop for TempGuard {
             let _ = fs::remove_file(&self.path);
         }
     }
+}
+
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+const LOCK_STALE: std::time::Duration = std::time::Duration::from_secs(30);
+
+struct HeldLock {
+    path: PathBuf,
+}
+
+impl Drop for HeldLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// Hold an exclusive lock file for a read-modify-write.
+///
+/// The lock is an atomic `create_new`. A lock older than 30 seconds is stale
+/// (the holder died) and is removed. If another live writer still holds it
+/// after 5 seconds, this returns an error and does not run `body`.
+pub fn with_claim_lock<T>(
+    lock: &Path,
+    body: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let started = std::time::Instant::now();
+    loop {
+        match OpenOptions::new().write(true).create_new(true).open(lock) {
+            Ok(mut file) => {
+                let _ = writeln!(
+                    file,
+                    "{} {}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0)
+                );
+                let held = HeldLock {
+                    path: lock.to_path_buf(),
+                };
+                let result = body();
+                drop(held);
+                return result;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if lock_is_stale(lock) {
+                    let _ = fs::remove_file(lock);
+                    continue;
+                }
+                if started.elapsed() >= LOCK_WAIT {
+                    return Err(
+                        "this claim is being updated by another attach. Retry adsertio_attach; nothing was written."
+                            .into(),
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(error) => return Err(format!("cannot lock the claim: {error}")),
+        }
+    }
+}
+
+fn lock_is_stale(lock: &Path) -> bool {
+    let Ok(meta) = fs::metadata(lock) else {
+        return true;
+    };
+    meta.modified()
+        .ok()
+        .and_then(|when| when.elapsed().ok())
+        .is_some_and(|age| age >= LOCK_STALE)
 }
 
 /// Write `bytes` to `dest` whole: a temp file beside it, synced, then either

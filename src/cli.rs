@@ -15,8 +15,9 @@ USAGE
   adsertio init                       create .adsertio/ in this folder
   adsertio claim --summary S [--evidence tool:path[#selector]]... [--author A] [--body B] [--id I] [--tags T]...
   adsertio attach --id I --evidence tool:path[#selector]...
-  adsertio view [--id I] [--verdict verified|refuted|unverified]
-  adsertio ls
+  adsertio view [--id I] [--verdict verified|refuted|unverified] [--states S]... [--compact] [--limit N] [--offset N]
+  adsertio ls [--limit N] [--offset N]
+  adsertio guide
   adsertio check                      read every claim; fail on any damage
   adsertio mcp                        start the stdio MCP server (same as adsertio-mcp)
   adsertio --version

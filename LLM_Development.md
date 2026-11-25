@@ -11,7 +11,8 @@ Probatio leave on disk. It does not call an LLM.
 
 ## Active context
 
-- **Version:** 1.0.0 in the tree. Not tagged and not published.
+- **Version:** 1.1.0 in the tree, on a branch. 1.0.0 is the tagged GitHub release. Not published to npm or crates.io.
+- **1.1.0:** evidence cache for one view, Probatio regular-file reads, `adsertio_guide`, paged `ls` and `view`. See `docs/perf/`.
 - **Built:** claim, attach, view, ls; Trammel, Chisel, and Probatio readers;
   freshness; strict store; hostile-input tests.
 - **Not built:** worktree overlays, a ledger re-catch verdict, Libellus id
@@ -19,6 +20,31 @@ Probatio leave on disk. It does not call an LLM.
 - **Next:** tag and publish only after Aron says so.
 
 ## Session log
+
+---
+
+## 1.1.0: repeated reads, guide, paging
+
+**Date:** 2026-11-25
+
+- Recorded a release-mode baseline, then kept two changes that measured faster:
+  one parse of a shared snapshot per view, and a direct read of ordinary
+  Probatio result files. Listing claim files did not get faster.
+- `adsertio_guide`, and `limit` / `offset` on `ls` and `view`. Counts still
+  cover the whole store. Omit limit to return every claim.
+
+---
+
+## 1.1.0 review fixes
+
+**Date:** 2026-11-25
+
+- Attach takes an exclusive lock file so parallel updates are not dropped.
+- The guide lists Probatio `#survivors`. Attach returns the pointers it wrote
+  as well as the new evidence count.
+- Paging applies only when limit or offset is passed.
+- Pointers that cannot resolve are rejected at write. Duplicate ids use a
+  relative path. Ids sort by number. A missing claims directory warns.
 
 ---
 

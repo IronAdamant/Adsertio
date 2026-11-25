@@ -177,7 +177,7 @@ pub fn view(project: &Path, claim: &Claim) -> View {
 }
 
 impl View {
-    pub fn to_value(&self, claim: &Claim) -> Value {
+    pub fn to_value(&self, claim: &Claim, compact: bool) -> Value {
         Value::obj(vec![
             ("id", Value::str(&claim.id)),
             ("summary", Value::str(&claim.summary)),
@@ -188,11 +188,14 @@ impl View {
                     self.evidence
                         .iter()
                         .map(|e| {
-                            Value::obj(vec![
+                            let mut fields = vec![
                                 ("pointer", Value::str(&e.pointer)),
                                 ("state", Value::str(e.state.name())),
-                                ("detail", Value::str(&e.detail)),
-                            ])
+                            ];
+                            if !compact {
+                                fields.push(("detail", Value::str(&e.detail)));
+                            }
+                            Value::obj(fields)
                         })
                         .collect(),
                 ),

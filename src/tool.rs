@@ -85,7 +85,10 @@ impl Tool {
                     f.push(("items", Value::obj(vec![("type", Value::str("string"))])));
                 }
                 if p.kind == Kind::UInt {
-                    f.push(("minimum", Value::int(0)));
+                    // `limit` pages a list, so 0 is not a page. Other counts
+                    // (offset) still start at 0.
+                    let minimum = if p.name == "limit" { 1 } else { 0 };
+                    f.push(("minimum", Value::int(minimum)));
                 }
                 if !p.choices.is_empty() {
                     f.push((
@@ -176,7 +179,13 @@ fn check_value(p: &Param, v: &Value) -> Result<(), String> {
             Ok(())
         }
         (Kind::Str, _) => bad("a string"),
-        (Kind::UInt, v) if v.as_u64().is_some() => Ok(()),
+        (Kind::UInt, v) if v.as_u64().is_some() => {
+            let n = v.as_u64().unwrap();
+            if p.name == "limit" && n < 1 {
+                return Err("limit must be at least 1. Omit limit to return every claim.".into());
+            }
+            Ok(())
+        }
         (Kind::UInt, _) => Err(format!(
             "{} must be a whole number from 0 up to 18446744073709551615",
             p.name

@@ -19,7 +19,7 @@ pub const MAX_EVIDENCE_BYTES: u64 = 64 * 1024 * 1024;
 
 const COMPACT_TABLES: &[&str] = &["test_edges", "blame"];
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ReadError {
     Missing(String),
     Unreadable(String),
@@ -91,12 +91,18 @@ pub fn read_trammel(project: &Path, rel: &str) -> Result<Snapshot, ReadError> {
 /// the strict parser. A folder is [`ReadError::Unreadable`].
 pub fn read_json(project: &Path, rel: &str, tool: &str) -> Result<Value, ReadError> {
     let path = open_contained(project, rel)?;
-    let bytes = read_bytes(&path, rel)?;
+    read_json_file(&path, rel, tool)
+}
+
+/// Parse a file that the caller has already checked is a regular file inside
+/// the project. Symlinks still go through [`read_json`], which resolves them.
+pub fn read_json_file(path: &Path, label: &str, tool: &str) -> Result<Value, ReadError> {
+    let bytes = read_bytes(path, label)?;
     if is_sqlite(&bytes) {
         return Err(ReadError::Unreadable(sqlite_message(tool)));
     }
-    let text = decode(&bytes, rel)?;
-    parse_json(&text, rel)
+    let text = decode(&bytes, label)?;
+    parse_json(&text, label)
 }
 
 /// One Chisel snapshot. Compact `test_edges` and `blame` tables are expanded

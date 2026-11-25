@@ -30,7 +30,11 @@ pub static TOOLS: &[Tool] = &[
         description: "The verified or unverified view: each claim with its verdict and the state of every piece of evidence. Verified needs evidence and all of it passing; refuted if any fails; otherwise unverified, with the reason per pointer.",
         params: &[
             Param { name: "id", kind: Kind::Str, required: false, doc: "Only this claim.", choices: &[] },
-            Param { name: "verdict", kind: Kind::Str, required: false, doc: "Only claims with this verdict.", choices: &["verified", "refuted", "unverified"] },
+            Param { name: "verdict", kind: Kind::Str, required: false, doc: "Only claims with this verdict. Do not also pass states.", choices: &["verified", "refuted", "unverified"] },
+            Param { name: "states", kind: Kind::StrList, required: false, doc: "Only claims with one of these verdicts: verified, refuted, unverified. Do not also pass verdict.", choices: &[] },
+            Param { name: "compact", kind: Kind::Bool, required: false, doc: "Omit evidence detail. Each pointer still has its state.", choices: &[] },
+            Param { name: "limit", kind: Kind::UInt, required: false, doc: "How many claims to return. Omit it to return every matching claim. Maximum 500 when paging.", choices: &[] },
+            Param { name: "offset", kind: Kind::UInt, required: false, doc: "Skip this many matching claims. Omit it, and limit, to return every claim.", choices: &[] },
         ],
         run: view,
     },
@@ -47,9 +51,19 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         name: "adsertio_ls",
         group: "core",
-        description: "List claim ids, summaries, and how many pointers each has. Does not read the evidence and does not report a verdict; call adsertio_view for that.",
-        params: &[],
+        description: "List claim ids, summaries, and how many pointers each has. Does not read the evidence and does not report a verdict; call adsertio_view for that. Returns every claim unless limit or offset is set. count is the whole store.",
+        params: &[
+            Param { name: "limit", kind: Kind::UInt, required: false, doc: "How many claims to return. Omit it to return every claim. Maximum 500 when paging.", choices: &[] },
+            Param { name: "offset", kind: Kind::UInt, required: false, doc: "Skip this many claims. Omit it, and limit, to return every claim.", choices: &[] },
+        ],
         run: ls,
+    },
+    Tool {
+        name: "adsertio_guide",
+        group: "core",
+        description: "Short guide for an agent: how a verdict is decided, the pointer shapes, paging, and what to call after the conversation is compacted. Does not read the store.",
+        params: &[],
+        run: guide,
     },
 ];
 
@@ -88,8 +102,15 @@ fn claim_add(a: &Args) -> Result<Value, String> {
         tags,
         body: a.str("body").unwrap_or_default().to_string(),
     };
-    fsx::write_atomic(&path, c.render().as_bytes(), false)
-        .map_err(|e| format!("claim \"{id}\" not written: {e}"))?;
+    fsx::write_atomic(&path, c.render().as_bytes(), false).map_err(|e| {
+        if e.contains("already exists") {
+            format!(
+                "claim \"{id}\" already exists at .adsertio/claims/{id}.md. Use another id, or adsertio_attach to add evidence."
+            )
+        } else {
+            format!("claim \"{id}\" not written: {e}")
+        }
+    })?;
     Ok(Value::obj(vec![
         ("id", Value::String(id)),
         ("evidence", Value::uint(c.evidence.len() as u64)),
@@ -151,37 +172,50 @@ fn attach(a: &Args) -> Result<Value, String> {
         seen.push(pointer.clone());
     }
     let path = fsx::join_id(&store.claims_dir(), id, 1)?.with_extension("md");
-    let meta = match std::fs::symlink_metadata(&path) {
-        Ok(meta) => meta,
-        Err(_) => return Err(format!("no claim with id \"{}\"", fsx::clip(id, 60))),
-    };
-    if meta.file_type().is_symlink() || !meta.is_file() {
-        return Err(format!("{} is not a claim file", path.display()));
-    }
-    let text = fsx::read_strict(&path)?;
-    let mut claim = Claim::parse(id, &text)
-        .map_err(|e| format!("corrupt claim {id} ({}): {e}", path.display()))?;
-    for pointer in &incoming {
-        if claim.evidence.iter().any(|kept| kept == pointer) {
-            return Err(format!(
-                "evidence \"{}\" is already on claim \"{id}\"",
-                fsx::clip(pointer, 60)
-            ));
+    let lock = store.claims_dir().join(format!(".{id}.md.lock"));
+    fsx::with_claim_lock(&lock, || {
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(meta) => meta,
+            Err(_) => {
+                return Err(format!(
+                    "no claim with id \"{}\". Call adsertio_ls for the ids, or adsertio_claim to record one.",
+                    fsx::clip(id, 60)
+                ))
+            }
+        };
+        if meta.file_type().is_symlink() || !meta.is_file() {
+            return Err(format!("{} is not a claim file", path.display()));
         }
-    }
-    claim.evidence.extend(incoming);
-    fsx::write_atomic(&path, claim.render().as_bytes(), true)
-        .map_err(|e| format!("claim \"{id}\" not updated: {e}"))?;
-    Ok(Value::obj(vec![
-        ("id", Value::str(&claim.id)),
-        ("evidence", Value::uint(claim.evidence.len() as u64)),
-    ]))
+        let text = fsx::read_strict(&path)?;
+        let mut claim = Claim::parse(id, &text)
+            .map_err(|e| format!("corrupt claim {id} ({}): {e}", path.display()))?;
+        for pointer in &incoming {
+            if claim.evidence.iter().any(|kept| kept == pointer) {
+                return Err(format!(
+                    "evidence \"{}\" is already on claim \"{id}\"",
+                    fsx::clip(pointer, 60)
+                ));
+            }
+        }
+        claim.evidence.extend(incoming.iter().cloned());
+        fsx::write_atomic(&path, claim.render().as_bytes(), true)
+            .map_err(|e| format!("claim \"{id}\" not updated: {e}"))?;
+        Ok(Value::obj(vec![
+            ("id", Value::str(&claim.id)),
+            ("evidence", Value::uint(claim.evidence.len() as u64)),
+            (
+                "added",
+                Value::Array(incoming.iter().map(|p| Value::str(p.as_str())).collect()),
+            ),
+        ]))
+    })
 }
 
-fn ls(_a: &Args) -> Result<Value, String> {
+fn ls(a: &Args) -> Result<Value, String> {
+    let (limit, offset) = page_args(a)?;
     let store = Store::open()?;
     let claims = claim::load_all(&store)?;
-    let rows = claims
+    let rows: Vec<Value> = claims
         .iter()
         .map(|claim| {
             Value::obj(vec![
@@ -191,43 +225,202 @@ fn ls(_a: &Args) -> Result<Value, String> {
             ])
         })
         .collect();
-    Ok(Value::obj(vec![
-        ("claims", Value::Array(rows)),
-        ("count", Value::uint(claims.len() as u64)),
-    ]))
+    let total = rows.len() as u64;
+    Ok(finish_page(
+        "adsertio_ls",
+        rows,
+        limit,
+        offset,
+        vec![("count", Value::uint(total))],
+    ))
 }
 
 fn view(a: &Args) -> Result<Value, String> {
+    let (limit, offset) = page_args(a)?;
+    let filter = verdict_filter(a)?;
+    let compact = a.bool("compact") == Some(true);
     let store = Store::open()?;
     let mut claims = claim::load_all(&store)?;
     if let Some(id) = a.str("id") {
         claims.retain(|c| c.id == id);
         if claims.is_empty() {
-            return Err(format!("no claim with id \"{}\"", fsx::clip(id, 60)));
+            return Err(format!(
+                "no claim with id \"{}\". Call adsertio_ls for the ids, or adsertio_claim to record one.",
+                fsx::clip(id, 60)
+            ));
         }
     }
     let mut rows = Vec::new();
     let (mut verified, mut refuted, mut unverified) = (0u64, 0u64, 0u64);
-    for c in &claims {
-        let v = verdict::view(&store.project, c);
-        match v.verdict {
-            verdict::Verdict::Verified => verified += 1,
-            verdict::Verdict::Refuted => refuted += 1,
-            verdict::Verdict::Unverified => unverified += 1,
+    let project = store.project.clone();
+    crate::cache::with_cache(|| {
+        for c in &claims {
+            let v = verdict::view(&project, c);
+            match v.verdict {
+                verdict::Verdict::Verified => verified += 1,
+                verdict::Verdict::Refuted => refuted += 1,
+                verdict::Verdict::Unverified => unverified += 1,
+            }
+            let keep = filter
+                .as_ref()
+                .is_none_or(|names| names.iter().any(|name| *name == v.verdict.name()));
+            if keep {
+                rows.push(v.to_value(c, compact));
+            }
         }
-        if a.str("verdict").is_none_or(|w| w == v.verdict.name()) {
-            rows.push(v.to_value(c));
+        Ok(finish_page(
+            "adsertio_view",
+            rows,
+            limit,
+            offset,
+            vec![(
+                "counts",
+                Value::obj(vec![
+                    ("verified", Value::uint(verified)),
+                    ("refuted", Value::uint(refuted)),
+                    ("unverified", Value::uint(unverified)),
+                ]),
+            )],
+        ))
+    })
+}
+
+const MAX_PAGE: u64 = 500;
+const LARGE_LIST: u64 = 100;
+
+/// `None` means no verdict filter. `verdict` and `states` are not combined.
+fn verdict_filter(a: &Args) -> Result<Option<Vec<&str>>, String> {
+    let states = a.list("states");
+    if a.str("verdict").is_some() && !states.is_empty() {
+        return Err(
+            "pass verdict or states, not both. states takes a list, for example [\"verified\", \"refuted\"]."
+                .into(),
+        );
+    }
+    for state in &states {
+        if !matches!(*state, "verified" | "refuted" | "unverified") {
+            return Err(format!(
+                "states must be verified, refuted, or unverified, not \"{state}\""
+            ));
         }
     }
+    if let Some(verdict) = a.str("verdict") {
+        return Ok(Some(vec![verdict]));
+    }
+    if states.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(states))
+    }
+}
+
+fn page_args(a: &Args) -> Result<(Option<usize>, usize), String> {
+    let offset = a.uint("offset").unwrap_or(0) as usize;
+    let limit = match a.uint("limit") {
+        None => None,
+        Some(0) => {
+            return Err("limit must be at least 1. Omit limit to return every claim.".into());
+        }
+        Some(n) if n > MAX_PAGE => {
+            return Err("limit is 500 at most. Pass offset to read the next page.".into());
+        }
+        Some(n) => Some(n as usize),
+    };
+    Ok((limit, offset))
+}
+
+fn page(items: Vec<Value>, limit: Option<usize>, offset: usize) -> (Vec<Value>, bool, Option<u64>) {
+    let take = limit.unwrap_or(usize::MAX);
+    if offset >= items.len() {
+        return (Vec::new(), false, None);
+    }
+    let end = offset.saturating_add(take).min(items.len());
+    let truncated = end < items.len();
+    let next = if truncated { Some(end as u64) } else { None };
+    let rows = items.into_iter().skip(offset).take(take).collect();
+    (rows, truncated, next)
+}
+
+fn finish_page(
+    tool: &str,
+    items: Vec<Value>,
+    limit: Option<usize>,
+    offset: usize,
+    mut extra: Vec<(&str, Value)>,
+) -> Value {
+    let listed = items.len() as u64;
+    let (rows, truncated, next) = page(items, limit, offset);
+    extra.insert(0, ("claims", Value::Array(rows)));
+    extra.push(("truncated", Value::Bool(truncated)));
+    extra.push((
+        "next_offset",
+        match next {
+            Some(n) => Value::uint(n),
+            None => Value::Null,
+        },
+    ));
+    if let Some(hint) = page_hint(tool, limit, next, listed) {
+        extra.push(("hint", Value::str(hint)));
+    }
+    Value::obj(extra)
+}
+
+fn page_hint(tool: &str, limit: Option<usize>, next: Option<u64>, listed: u64) -> Option<String> {
+    if let Some(offset) = next {
+        let lim = limit.unwrap_or(LARGE_LIST as usize);
+        return Some(format!(
+            "next: {tool} with {{\"limit\":{lim},\"offset\":{offset}}}"
+        ));
+    }
+    if limit.is_none() && listed > LARGE_LIST {
+        return Some(format!(
+            "{listed} claims. Pass limit and offset to page, for example {tool} with {{\"limit\":100,\"offset\":0}}."
+        ));
+    }
+    None
+}
+
+fn guide(_a: &Args) -> Result<Value, String> {
     Ok(Value::obj(vec![
-        ("claims", Value::Array(rows)),
         (
-            "counts",
-            Value::obj(vec![
-                ("verified", Value::uint(verified)),
-                ("refuted", Value::uint(refuted)),
-                ("unverified", Value::uint(unverified)),
+            "verdict",
+            Value::str(
+                "verified: every pointer passed, and there is at least one. refuted: any pointer failed. unverified: anything else. Computed by adsertio_view, never stored.",
+            ),
+        ),
+        (
+            "after_compaction",
+            Value::str(
+                "Call adsertio_ls, then adsertio_view for the ids that matter. Do not repeat a verdict from memory.",
+            ),
+        ),
+        (
+            "selectors",
+            Value::Array(vec![
+                Value::str("trammel:.trammel/store#plan-<id>/step-<id>"),
+                Value::str("trammel:.trammel/store#plan-<id>"),
+                Value::str("trammel:.trammel/store#constraint-<id>"),
+                Value::str("trammel:.trammel/store#failure-<id>"),
+                Value::str("chisel:.chisel/store#test:<test_id>"),
+                Value::str("chisel:.chisel/store#file:<path>"),
+                Value::str("probatio:<out-dir>"),
+                Value::str("probatio:<out-dir>#survivors"),
+                Value::str("probatio:out/run#survivors"),
+                Value::str("probatio:<out-dir>#mutant:<id>"),
+                Value::str("probatio:<out-dir>#ledger"),
             ]),
+        ),
+        (
+            "paging",
+            Value::str(
+                "Omit limit and offset and adsertio_ls and adsertio_view return every matching claim. Pass limit (1 to 500) and offset to page. count and counts cover the whole store. When truncated is true, hint gives the next call and next_offset is the offset to pass.",
+            ),
+        ),
+        (
+            "writes",
+            Value::str(
+                "adsertio_claim never overwrites. Add pointers with adsertio_attach. A repeated pointer is an error and the file is left unchanged.",
+            ),
         ),
     ]))
 }

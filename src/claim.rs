@@ -48,7 +48,32 @@ pub fn valid_pointer(p: &str) -> Result<(), String> {
             fsx::clip(p, 60)
         ));
     }
+    if let Some(why) = pointer_path_problem(path) {
+        return Err(format!(
+            "evidence \"{}\" {why} Use a relative path with forward slashes inside the project, such as trammel:.trammel/store#plan-1/step-1",
+            fsx::clip(p, 60)
+        ));
+    }
     Ok(())
+}
+
+/// Backslashes, drive letters, absolute paths, and `..` never resolve. Reject
+/// them when the pointer is written, not only when it is read.
+fn pointer_path_problem(path: &str) -> Option<&'static str> {
+    let bytes = path.as_bytes();
+    if path.contains('\\') {
+        return Some("uses backslashes.");
+    }
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return Some("uses a drive letter.");
+    }
+    if path.starts_with('/') {
+        return Some("is absolute.");
+    }
+    if path.split('/').any(|part| part == "..") {
+        return Some("leaves the project with '..'.");
+    }
+    None
 }
 
 pub fn validate_summary(s: &str) -> Result<(), String> {
@@ -175,12 +200,58 @@ impl Claim {
     }
 }
 
+/// Compare ids with number runs as integers, so `c2` comes before `c10`.
+fn cmp_id(left: &str, right: &str) -> std::cmp::Ordering {
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    let (mut i, mut j) = (0, 0);
+    while i < left.len() && j < right.len() {
+        if left[i].is_ascii_digit() && right[j].is_ascii_digit() {
+            while i < left.len() && left[i] == b'0' {
+                i += 1;
+            }
+            while j < right.len() && right[j] == b'0' {
+                j += 1;
+            }
+            let i0 = i;
+            let j0 = j;
+            while i < left.len() && left[i].is_ascii_digit() {
+                i += 1;
+            }
+            while j < right.len() && right[j].is_ascii_digit() {
+                j += 1;
+            }
+            let order = (i - i0).cmp(&(j - j0)).then(left[i0..i].cmp(&right[j0..j]));
+            if order != std::cmp::Ordering::Equal {
+                return order;
+            }
+        } else {
+            let i0 = i;
+            let j0 = j;
+            while i < left.len() && !left[i].is_ascii_digit() {
+                i += 1;
+            }
+            while j < right.len() && !right[j].is_ascii_digit() {
+                j += 1;
+            }
+            let order = left[i0..i].cmp(&right[j0..j]);
+            if order != std::cmp::Ordering::Equal {
+                return order;
+            }
+        }
+    }
+    left.len().cmp(&right.len())
+}
+
 /// Every claim, oldest first. A damaged claim fails the whole read.
 pub fn load_all(store: &Store) -> Result<Vec<Claim>, String> {
     let dir = store.claims_dir();
     let rd = match fs::read_dir(&dir) {
         Ok(r) => r,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("no claims store found at {}; run init", store.dir.display());
+            return Ok(Vec::new());
+        }
         Err(e) => return Err(format!("cannot read {}: {e}", dir.display())),
     };
     let mut claims = Vec::new();
@@ -212,7 +283,7 @@ pub fn load_all(store: &Store) -> Result<Vec<Claim>, String> {
                 .map_err(|e| format!("corrupt claim {id} ({}): {e}", path.display()))?,
         );
     }
-    claims.sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
+    claims.sort_by(|a, b| a.created.cmp(&b.created).then_with(|| cmp_id(&a.id, &b.id)));
     Ok(claims)
 }
 
@@ -257,5 +328,22 @@ mod tests {
         assert!(valid_pointer("probatio:#x").is_err());
         assert!(valid_pointer("stele:a").is_err());
         assert!(valid_pointer("chisel:a b").is_err());
+        for bad in [
+            r"trammel:.trammel\store",
+            "trammel:C:/store",
+            "trammel:/etc/passwd",
+            "trammel:../secret",
+        ] {
+            let err = valid_pointer(bad).unwrap_err();
+            assert!(err.contains("forward slashes"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn ids_sort_numbers_ahead_of_text_order() {
+        assert_eq!(cmp_id("c2", "c10"), std::cmp::Ordering::Less);
+        assert_eq!(cmp_id("c10", "c100"), std::cmp::Ordering::Less);
+        assert_eq!(cmp_id("c100", "c2"), std::cmp::Ordering::Greater);
+        assert_eq!(cmp_id("retry", "retry-2"), std::cmp::Ordering::Less);
     }
 }
