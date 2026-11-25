@@ -85,6 +85,9 @@ pub fn read_evidence(project: &Path, pointer: &str) -> Evidence {
         return mk(State::Unreadable, e);
     }
     let (tool, rest) = pointer.split_once(':').unwrap_or(("", pointer));
+    if tool == "trammel" {
+        return crate::trammel::evaluate(project, pointer);
+    }
     let path = rest.split('#').next().unwrap_or("");
     let file = match fsx::project_file(project, path) {
         Ok(f) => f,

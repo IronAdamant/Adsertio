@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "plans": [
+    {"id": 1, "goal": "retry"},
+    {"id": 2, "goal": "both steps pass"},
+    {"id": 3, "goal": "no steps yet"}
+  ],
+  "steps": [
+    {
+      "id": 1,
+      "plan_id": 1,
+      "step_index": 1,
+      "status": "passed",
+      "verification": {
+        "passed": true,
+        "command": "cargo test",
+        "source": "working_tree",
+        "at": 4102444800
+      }
+    },
+    {
+      "id": 2,
+      "plan_id": 1,
+      "step_index": 2,
+      "status": "failed",
+      "verification": {
+        "passed": false,
+        "command": "cargo test",
+        "source": "working_tree",
+        "at": 4102444800,
+        "excerpt": "assertion failed"
+      }
+    },
+    {
+      "id": 3,
+      "plan_id": 1,
+      "step_index": 3,
+      "status": "pending"
+    },
+    {
+      "id": 4,
+      "plan_id": 2,
+      "step_index": 1,
+      "status": "passed",
+      "verification": {
+        "passed": true,
+        "command": "cargo test",
+        "source": "working_tree",
+        "at": 4102444800
+      }
+    },
+    {
+      "id": 5,
+      "plan_id": 2,
+      "step_index": 2,
+      "status": "passed",
+      "verification": {
+        "passed": true,
+        "command": "cargo test",
+        "source": "working_tree",
+        "at": 4102444800
+      }
+    },
+    {
+      "id": 7,
+      "plan_id": 4,
+      "step_index": 1,
+      "status": "passed",
+      "verification": {
+        "passed": true,
+        "command": "cargo test",
+        "source": "working_tree",
+        "at": 4102444800
+      }
+    }
+  ],
+  "constraints": [
+    {"id": 1, "plan_id": 1, "constraint_type": "test", "description": "keep the retry", "active": true, "created": 1},
+    {"id": 2, "plan_id": 1, "constraint_type": "test", "description": "old rule", "active": false, "created": 1},
+    {"id": 3, "plan_id": 1, "constraint_type": "test", "description": "default active", "created": 1}
+  ],
+  "failures": [
+    {
+      "id": 1,
+      "file_path": "src/net.rs",
+      "error_type": "timeout",
+      "last_resolution": "raised the cap",
+      "plan_id": 1,
+      "step_id": 2,
+      "created": 1
+    }
+  ]
+}

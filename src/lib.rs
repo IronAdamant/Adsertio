@@ -13,6 +13,7 @@ pub mod read;
 pub mod store;
 pub mod tool;
 pub mod tools;
+pub mod trammel;
 pub mod verdict;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
