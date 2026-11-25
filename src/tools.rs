@@ -208,26 +208,29 @@ fn view(a: &Args) -> Result<Value, String> {
     }
     let mut rows = Vec::new();
     let (mut verified, mut refuted, mut unverified) = (0u64, 0u64, 0u64);
-    for c in &claims {
-        let v = verdict::view(&store.project, c);
-        match v.verdict {
-            verdict::Verdict::Verified => verified += 1,
-            verdict::Verdict::Refuted => refuted += 1,
-            verdict::Verdict::Unverified => unverified += 1,
+    let project = store.project.clone();
+    crate::cache::with_cache(|| {
+        for c in &claims {
+            let v = verdict::view(&project, c);
+            match v.verdict {
+                verdict::Verdict::Verified => verified += 1,
+                verdict::Verdict::Refuted => refuted += 1,
+                verdict::Verdict::Unverified => unverified += 1,
+            }
+            if a.str("verdict").is_none_or(|w| w == v.verdict.name()) {
+                rows.push(v.to_value(c));
+            }
         }
-        if a.str("verdict").is_none_or(|w| w == v.verdict.name()) {
-            rows.push(v.to_value(c));
-        }
-    }
-    Ok(Value::obj(vec![
-        ("claims", Value::Array(rows)),
-        (
-            "counts",
-            Value::obj(vec![
-                ("verified", Value::uint(verified)),
-                ("refuted", Value::uint(refuted)),
-                ("unverified", Value::uint(unverified)),
-            ]),
-        ),
-    ]))
+        Ok(Value::obj(vec![
+            ("claims", Value::Array(rows)),
+            (
+                "counts",
+                Value::obj(vec![
+                    ("verified", Value::uint(verified)),
+                    ("refuted", Value::uint(refuted)),
+                    ("unverified", Value::uint(unverified)),
+                ]),
+            ),
+        ]))
+    })
 }

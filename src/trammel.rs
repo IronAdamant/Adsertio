@@ -31,8 +31,10 @@ pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
         Some((rel, selector)) => (rel, selector),
         None => (rest, ""),
     };
-    let doc = match read::read_trammel(project, rel) {
-        Ok(snapshot) => snapshot.doc,
+    let doc = match crate::cache::trammel(project, rel, || {
+        read::read_trammel(project, rel).map(|snapshot| snapshot.doc)
+    }) {
+        Ok(doc) => doc,
         Err(ReadError::Missing(text)) => return evidence(pointer, State::Missing, text),
         Err(ReadError::Unreadable(text)) => return evidence(pointer, State::Unreadable, text),
     };

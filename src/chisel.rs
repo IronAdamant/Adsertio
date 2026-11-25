@@ -44,7 +44,7 @@ pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
             "worktree overlays under .chisel/overlays are not read in v1, so this is not proof",
         );
     }
-    let docs = match load(project, rel) {
+    let docs = match crate::cache::chisel(project, rel, || load(project, rel)) {
         Ok(docs) => docs,
         Err(ReadError::Missing(text)) => return evidence(pointer, State::Missing, text),
         Err(ReadError::Unreadable(text)) => return evidence(pointer, State::Unreadable, text),

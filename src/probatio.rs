@@ -89,8 +89,17 @@ fn file_instead_of_folder(project: &Path, pointer: &str, rel: &str) -> Evidence 
 }
 
 fn whole_run(project: &Path, pointer: &str, rel: &str, out_dir: &Path) -> Evidence {
-    let loaded = match load_results(project, rel, out_dir) {
-        Ok(loaded) => loaded,
+    let loaded = match crate::cache::probatio(project, rel, || {
+        load_results(project, rel, out_dir)
+            .map(|rows| rows.map(|items| items.into_iter().map(|item| item.outcome).collect()))
+    }) {
+        Ok(rows) => rows.map(|arc| {
+            arc.iter()
+                .map(|outcome| Mutant {
+                    outcome: outcome.clone(),
+                })
+                .collect::<Vec<_>>()
+        }),
         Err(ReadError::Unreadable(text)) => return evidence(pointer, State::Unreadable, text),
         Err(ReadError::Missing(text)) => return evidence(pointer, State::Missing, text),
     };
@@ -305,7 +314,21 @@ fn load_results(
     let mut rows = Vec::new();
     for name in names {
         let rel_file = format!("{rel}/results/{name}");
-        let value = read::read_json(project, &rel_file, "probatio")?;
+        let path = results.join(&name);
+        let meta = fs::symlink_metadata(&path)
+            .map_err(|error| ReadError::Unreadable(format!("cannot stat {rel_file}: {error}")))?;
+        // A symlink can leave the project, so it keeps the full path check.
+        // A regular file under the results directory, which is already inside
+        // the project, cannot: its name is one path segment.
+        let value = if meta.file_type().is_symlink() {
+            read::read_json(project, &rel_file, "probatio")?
+        } else if meta.is_file() {
+            read::read_json_file(&path, &rel_file, "probatio")?
+        } else {
+            return Err(ReadError::Unreadable(format!(
+                "{rel_file} is a folder; point at a file"
+            )));
+        };
         let outcome = outcome_of(&value)
             .map_err(|text| ReadError::Unreadable(format!("{rel_file} {text}")))?;
         rows.push(Mutant { outcome });
