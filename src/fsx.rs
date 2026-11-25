@@ -114,7 +114,7 @@ pub fn with_claim_lock<T>(
                 drop(held);
                 return result;
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(error) if lock_contended(&error) => {
                 if break_abandoned_lock(lock) {
                     continue;
                 }
@@ -129,6 +129,17 @@ pub fn with_claim_lock<T>(
             Err(error) => return Err(format!("cannot lock the claim: {error}")),
         }
     }
+}
+
+/// `true` when creating the lock failed because another attach holds it, or
+/// is releasing it. Windows returns access denied (5) or a sharing violation
+/// (32) while another process deletes the name, so those mean "try again"
+/// there. On Unix, permission denied is a real error (a read-only folder).
+fn lock_contended(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::AlreadyExists
+        || (cfg!(windows)
+            && (err.kind() == std::io::ErrorKind::PermissionDenied
+                || matches!(err.raw_os_error(), Some(5) | Some(32))))
 }
 
 /// `true` when a live process still holds `lock`. A missing file is not held.

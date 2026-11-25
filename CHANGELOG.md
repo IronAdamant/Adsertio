@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- On Windows, two attaches racing on one claim could fail with "cannot lock
+  the claim: Access is denied". Windows reports that while another process
+  is deleting the lock file. It now counts as a held lock and is retried.
+
 ## 1.2.2
 
 Same claim format as 1.2.1. The rule for this release: when Adsertio cannot
