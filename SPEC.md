@@ -194,4 +194,4 @@ Newline-delimited JSON-RPC 2.0 on stdio.
 - Resolving `adsertio:<id>` from a Libellus note. Libellus already stores the
   pointer as text.
 - Running Trammel, Chisel, or Probatio.
-- Release binaries and npm packages.
+- An npm package or a crates.io publish. A tag named `v*` builds release binaries and attaches them to the GitHub release.

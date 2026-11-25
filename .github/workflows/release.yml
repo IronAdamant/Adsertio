@@ -1,0 +1,150 @@
+# A tag named v* builds the release binaries and publishes a GitHub Release
+# with checksums. Notes come from the matching section of CHANGELOG.md.
+# This file does not run on a pull request. It does not publish to npm or crates.io.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: adsertio-linux-x64
+            kind: tar
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            asset: adsertio-macos-x64
+            kind: tar
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: adsertio-macos-arm64
+            kind: tar
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: adsertio-windows-x64
+            kind: zip
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.83.0 --profile minimal
+          rustup target add "${TARGET}" --toolchain 1.83.0
+
+      - name: Build
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --target "${TARGET}"
+
+      - name: Pack
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          ASSET: ${{ matrix.asset }}
+          KIND: ${{ matrix.kind }}
+        run: |
+          set -euo pipefail
+          ext=""
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            ext=".exe"
+          fi
+          stage="dist/${ASSET}"
+          mkdir -p "${stage}"
+          cp "target/${TARGET}/release/adsertio${ext}" "${stage}/"
+          cp "target/${TARGET}/release/adsertio-mcp${ext}" "${stage}/"
+          if [ "${KIND}" = "zip" ]; then
+            powershell.exe -NoProfile -Command "Compress-Archive -Path 'dist/${ASSET}' -DestinationPath 'dist/${ASSET}.zip' -Force"
+            name="${ASSET}.zip"
+          else
+            tar -C dist -czf "dist/${ASSET}.tar.gz" "${ASSET}"
+            name="${ASSET}.tar.gz"
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd dist && sha256sum "${name}" > "${name}.sha256")
+          elif command -v shasum >/dev/null 2>&1; then
+            (cd dist && shasum -a 256 "${name}" > "${name}.sha256")
+          else
+            hash="$(powershell.exe -NoProfile -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath 'dist/${name}').Hash.ToLower()")"
+            hash="$(printf '%s' "${hash}" | tr -d '\r\n')"
+            printf '%s  %s\n' "${hash}" "${name}" > "dist/${name}.sha256"
+          fi
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          if-no-files-found: error
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+
+  github-release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          cat ./*.sha256 | sort > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          test -s SHA256SUMS
+          rm -f ./*.sha256
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          notes="$(awk -v ver="${version}" '
+            $0 ~ "^## " ver "($| )" { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md)"
+          printf '%s\n' "${notes}" | sed -e :a -e '/^[[:space:]]*$/{$d;N;ba}' -e '/./,$!d' > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "CHANGELOG.md has no section for ${version}"
+            exit 1
+          fi
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${tag}" dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
+              --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "${tag}" dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${tag}" \
+              --notes-file notes.md
+          fi

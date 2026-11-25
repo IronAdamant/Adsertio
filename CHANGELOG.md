@@ -2,8 +2,7 @@
 
 ## 1.0.0
 
-The readers, freshness, attach, and list. The version is 1.0.0. It is not tagged
-and not published.
+The readers, freshness, attach, and list. Release binaries for Linux x64, macOS x64, macOS arm64, and Windows x64 are attached to the GitHub release. Not published to npm or crates.io.
 
 - Trammel adapter: `plan-<id>/step-<id>`, `plan-<id>`, `constraint-<id>`,
   `failure-<id>`. A shared lock on `.trammel/lock` when that file exists. The
