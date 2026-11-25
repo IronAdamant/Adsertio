@@ -1,0 +1,120 @@
+//! The failure modes found across the other tools: each must be an error
+//! reply, with the server still alive for the next request.
+mod common;
+use common::*;
+
+const PING: &str = "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"ping\"}\n";
+
+#[test]
+fn deeply_nested_json_is_an_error_and_the_server_lives() {
+    let dir = project("deep");
+    let mut input = Vec::new();
+    input.extend(std::iter::repeat_n(b'[', 500_000));
+    input.push(b'\n');
+    input.extend(PING.as_bytes());
+    let replies = talk(&dir, &input);
+    assert_eq!(replies.len(), 2, "{replies:?}");
+    assert!(replies[0].contains("-32700"), "{}", replies[0]);
+    assert!(replies[1].contains("\"id\":9"));
+}
+
+#[test]
+fn invalid_utf8_is_an_error_and_the_server_lives() {
+    let dir = project("utf8");
+    let mut input = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"\xff\xfe\"}\n".to_vec();
+    input.extend(PING.as_bytes());
+    let replies = talk(&dir, &input);
+    assert_eq!(replies.len(), 2, "{replies:?}");
+    assert!(replies[0].contains("-32700") && replies[0].contains("UTF-8"));
+    assert!(replies[1].contains("\"id\":9"));
+}
+
+#[test]
+fn oversized_line_is_an_error_and_the_server_lives() {
+    let dir = project("big");
+    let mut input = vec![b'x'; 5 * 1024 * 1024];
+    input.push(b'\n');
+    input.extend(PING.as_bytes());
+    let replies = talk(&dir, &input);
+    assert_eq!(replies.len(), 2, "{replies:?}");
+    assert!(replies[0].contains("-32600"));
+    assert!(replies[1].contains("\"id\":9"));
+}
+
+#[test]
+fn unknown_methods_are_errors_but_notifications_stay_silent() {
+    let dir = project("methods");
+    let input = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"resources/list\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"resources/list\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n[]\n42\n{\"jsonrpc\":\"2.0\",\"id\":[1],\"method\":\"ping\"}\n";
+    let replies = talk(&dir, input.as_bytes());
+    assert_eq!(replies.len(), 4, "{replies:?}");
+    assert!(replies[0].contains("-32601"));
+    assert!(replies[1].contains("batches"));
+    assert!(replies[2].contains("-32600"));
+    assert!(replies[3].contains("-32600"));
+}
+
+#[test]
+fn tool_errors_set_is_error() {
+    let dir = project("iserror");
+    init(&dir);
+    let mut input = String::new();
+    input += &call("adsertio_claim", r#"{"summary":"s","colour":"red"}"#, 1);
+    input += &call("adsertio_claim", r#"{}"#, 2);
+    input += &call("adsertio_claim", r#"{"summary":5}"#, 3);
+    input += &call(
+        "adsertio_claim",
+        r#"{"summary":"s","evidence":["jest:a.json"]}"#,
+        4,
+    );
+    input += &call(
+        "adsertio_claim",
+        r#"{"summary":"s","evidence":"chisel:a"}"#,
+        5,
+    );
+    input += &call("adsertio_view", r#"{"verdict":"maybe"}"#, 6);
+    input += &call("adsertio_view", r#""not an object""#, 7);
+    input += &call("adsertio_view", r#"{"id":"nothing-here"}"#, 8);
+    let replies = talk(&dir, input.as_bytes());
+    assert_eq!(replies.len(), 8);
+    for r in &replies {
+        assert!(is_error(r), "{r}");
+    }
+    assert!(replies[0].contains("unknown argument"));
+    let unknown_tool = talk(&dir, call("nope", "{}", 1).as_bytes());
+    assert!(unknown_tool[0].contains("-32602"));
+}
+
+#[test]
+fn ids_are_guarded() {
+    let dir = project("paths");
+    init(&dir);
+    let mut input = String::new();
+    input += &call(
+        "adsertio_claim",
+        r#"{"summary":"s","id":"../../escape"}"#,
+        1,
+    );
+    input += &call("adsertio_claim", r#"{"summary":"s","id":"/etc/x"}"#, 2);
+    input += &call("adsertio_claim", r#"{"summary":"s","id":"a/b"}"#, 3);
+    input += &call("adsertio_claim", r#"{"summary":"s","author":"../x"}"#, 4);
+    let replies = talk(&dir, input.as_bytes());
+    for r in &replies {
+        assert!(is_error(r), "{r}");
+    }
+    assert!(!dir.parent().unwrap().join("escape.md").exists());
+}
+
+#[test]
+fn no_store_is_an_error_and_creates_nothing() {
+    let dir = project("nostore");
+    let replies = talk(
+        &dir,
+        call("adsertio_claim", r#"{"summary":"s"}"#, 1).as_bytes(),
+    );
+    assert!(
+        is_error(&replies[0]) && replies[0].contains("adsertio init"),
+        "{}",
+        replies[0]
+    );
+    assert!(!dir.join(".adsertio").exists());
+}
