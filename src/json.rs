@@ -67,6 +67,48 @@ impl Value {
         }
     }
 
+    /// An integer that fits `i64`. Fractions and exponents are `None`: a
+    /// timestamp or an id written as `1.0` is not treated as `1`.
+    pub fn as_i64(&self) -> Option<i64> {
+        let Value::Number(n) = self else {
+            return None;
+        };
+        let digits = n.strip_prefix('-').unwrap_or(n);
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        n.parse().ok()
+    }
+
+    /// A finite JSON number. `None` for non-numbers and for infinities.
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Value::Number(n) => n.parse::<f64>().ok().filter(|n| n.is_finite()),
+            _ => None,
+        }
+    }
+
+    /// Replace `key`, or append it. No effect unless `self` is an object.
+    pub fn insert(&mut self, key: &str, value: Value) {
+        let Value::Object(pairs) = self else {
+            return;
+        };
+        if let Some((_, slot)) = pairs.iter_mut().find(|(k, _)| k == key) {
+            *slot = value;
+        } else {
+            pairs.push((key.to_string(), value));
+        }
+    }
+
+    /// Remove `key` and return its value.
+    pub fn take(&mut self, key: &str) -> Option<Value> {
+        let Value::Object(pairs) = self else {
+            return None;
+        };
+        let index = pairs.iter().position(|(k, _)| k == key)?;
+        Some(pairs.remove(index).1)
+    }
+
     pub fn as_array(&self) -> Option<&[Value]> {
         match self {
             Value::Array(a) => Some(a),
@@ -423,5 +465,20 @@ mod tests {
         assert_eq!(parse("-1").unwrap().as_u64(), None);
         assert_eq!(parse("1.0").unwrap().as_u64(), None);
         assert_eq!(parse("99999999999999999999999").unwrap().as_u64(), None);
+    }
+
+    #[test]
+    fn integers_and_floats_stay_distinct() {
+        assert_eq!(parse("-2").unwrap().as_i64(), Some(-2));
+        assert_eq!(parse("1.5").unwrap().as_i64(), None);
+        assert_eq!(parse("1e2").unwrap().as_i64(), None);
+        assert_eq!(parse("1.5").unwrap().as_f64(), Some(1.5));
+        assert_eq!(parse("1").unwrap().as_f64(), Some(1.0));
+        assert!(parse("1e9999").unwrap().as_f64().is_none());
+        let mut obj = parse(r#"{"a":1,"b":2}"#).unwrap();
+        assert_eq!(obj.take("b").unwrap().as_i64(), Some(2));
+        obj.insert("a", Value::int(3));
+        assert_eq!(obj.get("a").unwrap().as_i64(), Some(3));
+        assert!(obj.get("b").is_none());
     }
 }

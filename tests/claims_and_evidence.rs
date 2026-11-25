@@ -44,7 +44,13 @@ fn evidence_states_are_reported_per_pointer_and_never_count_as_proof_yet() {
     let r = talk(&dir, input.as_bytes());
     assert!(is_ok(&r[0]), "{}", r[0]);
     assert!(
-        r[1].contains("no_adapter") && r[1].contains("missing") && r[1].contains("unreadable"),
+        r[1].contains("missing") && r[1].contains("unreadable") && r[1].contains("magic"),
+        "{}",
+        r[1]
+    );
+    assert!(
+        !r[1].contains("\\\"state\\\":\\\"pass\\\"")
+            && !r[1].contains("\\\"state\\\":\\\"fail\\\""),
         "{}",
         r[1]
     );

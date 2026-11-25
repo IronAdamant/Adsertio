@@ -1,0 +1,1 @@
+{"commit":"abc","package":"pkg","testsDir":"tests","entries":[{"id":"a","status":"clean"},{"id":"b","status":"hand"},{"id":"c","status":"skipped"}]}

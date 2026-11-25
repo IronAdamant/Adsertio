@@ -1,120 +1,151 @@
 # Adsertio
 
+## What it is
+
+Adsertio keeps one claim in one file: a single line, plus pointers at proof that already exists on disk. When you ask, it reads those files and says whether the claim holds.
+
+## Why it exists
+
+An agent says "the retry change passes" or "no test misses that branch". The proof is already there, scattered: a Trammel plan step, a Chisel test result, a Probatio mutant that no test caught. Nothing ties the claim to that proof and says, honestly, whether it holds.
+
+A claim is one line plus pointers at files those tools already wrote. On every view, Adsertio reads those files and reports **verified**, **refuted**, or **unverified**, with a reason for each pointer. Verified needs evidence, and all of it passing. Any failing evidence refutes. Everything else, including "I cannot read this", is unverified. A file Adsertio does not understand is not proof. The verdict is worked out on every view and is never stored.
+
+It deliberately does not:
+
+- run Trammel, Chisel, or Probatio, or write into `.trammel/`, `.chisel/`, or a Probatio output folder
+- copy their data into its own store (pointers only)
+- call a model
+- plan work, run tests, or mutate code
+- treat a file it does not understand as a pass
+
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**One verified-or-unverified view per claim, read from the evidence other tools left on disk.**
+Standard library only, no Cargo crates. One binary: the `adsertio` CLI and the `adsertio-mcp` stdio server (`adsertio mcp` is the same program).
 
-An agent says "the retry change passes" or "no test misses that branch". The
-proof already exists, scattered: a Trammel `verify_step` result, a Chisel test
-run, a Probatio mutation survivor list. Adsertio ties each claim to pointers at
-that evidence and reports one verdict: **verified**, **refuted** or **unverified**,
-with the reason for every pointer.
+## Install
 
-It reads the other tools' files and does not duplicate them. It never calls a
-model, and it never runs a tool for you. Standard library only, no Cargo crates,
-a CLI and a stdio MCP server over the same files.
+Build it (Rust 1.83 or newer):
 
-> **Status: v0.1.0, a scaffold.** Claims, pointers, the path and read guards, the
-> verdict rules and the MCP server work and are tested. **The adapters that
-> interpret Trammel, Chisel and Probatio output are not built**, so today no
-> claim can reach "verified". That is deliberate: evidence Adsertio cannot read
-> yet is reported as `no_adapter` and never counts as proof. See "What works
-> today" and [SPEC.md](SPEC.md).
-
-## How it works
-
-```
-.adsertio/
-  claims/retry-passes.md        <- a claim and its evidence pointers
+```sh
+git clone https://github.com/IronAdamant/Adsertio
+cd Adsertio
+cargo build --release --locked
 ```
 
-A claim is one line plus pointers, each `tool:path[#selector]`, where the tool is
-`trammel`, `chisel` or `probatio` and the path is inside the project:
+That writes `target/release/adsertio` and `target/release/adsertio-mcp`. Release binaries and an npm package are not published. Adsertio is not on crates.io.
+
+## Usage
+
+```sh
+cd your-project
+adsertio init
+adsertio claim --summary "Retry step passed" \
+  --evidence 'trammel:.trammel/store#plan-1/step-1'
+adsertio attach --id retry-step-passed \
+  --evidence 'chisel:.chisel/store#test:tests/a.rs:t1'
+adsertio view
+adsertio ls
+adsertio check
+```
+
+`init` creates `.adsertio/` in the current folder. The project is the folder that holds it. Evidence paths are resolved inside that folder.
+
+A claim file looks like this:
 
 ```markdown
 ---
 summary: The retry change passes its plan step
 author: main
 created: 2026-11-25T02:05:00Z
-evidence: [trammel:.trammel/store#plan-3/step-2, chisel:.chisel/store]
+evidence: [trammel:.trammel/store#plan-1/step-1]
 ---
 ```
 
-The verdict is never stored. `adsertio_view` works it out from the evidence each
-time, so it cannot go stale:
+There is no `verdict` field. `adsertio view` computes it. `adsertio ls` lists id, summary, and pointer count, and does not read the evidence.
 
-- **verified**: there is evidence and all of it passes.
-- **refuted**: any evidence fails.
-- **unverified**: everything else, including no evidence, a missing file, an
-  unreadable file, and evidence Adsertio has no adapter for. The view says which.
+Pointers are `tool:path[#selector]`. The tool is `trammel`, `chisel`, or `probatio`. The path is inside the project. Selectors are in [SPEC.md](SPEC.md). In short:
 
-Per pointer the state is `pass`, `fail`, `missing`, `unreadable` or `no_adapter`.
+| Pointer | Passes when |
+|---|---|
+| `trammel:.trammel/store#plan-<id>/step-<id>` | that step's `verification.passed` is true |
+| `trammel:.trammel/store#plan-<id>` | every step of the plan passed, and there is at least one |
+| `chisel:.chisel/store#test:<test_id>` | the latest result for that test passed |
+| `chisel:.chisel/store#file:<path>` | every test that touches that file last passed, and at least one does |
+| `probatio:<out>#survivors` (or no selector) | at least one mutant was killed and none survived |
+| `probatio:<out>#mutant:<id>` | that mutant's outcome is `killed` |
 
-## What it is not
+A pass recorded before the claim was written, or against a commit that is not `HEAD`, does not verify the claim. A failure still refutes it. `git rev-parse HEAD` is the only external program, and only for that check.
 
-| Tool | What it holds | Adsertio instead |
-|---|---|---|
-| Trammel | Plans, constraints, `verify_step` results, failure history | Reads them as evidence. Does not plan or verify. |
-| Chisel | Test impact and results, coverage | Reads them as evidence. Does not run tests. |
-| Probatio | Mutation runs and survivors | Reads them as evidence. Does not mutate. |
-| Libellus | An agent's private notes and costs | A Libellus note can point at a claim as `adsertio:<id>`. |
-| Relatum | Notes shared across a swarm | Claims are about evidence, not shared context. |
+## MCP tools
 
-## What works today
+Claude Code (`.mcp.json`) or Cursor (`.cursor/mcp.json`):
 
-| Tool | Group | Does |
-|---|---|---|
-| `adsertio_claim` | core | Record a claim with evidence pointers. Never overwrites. |
-| `adsertio_view` | core | Each claim's verdict and the state of every pointer. |
-
-The same as CLI commands without the `adsertio_` prefix:
-
-```sh
-cargo build --release
-cd your-project
-adsertio init
-adsertio claim --summary "Retry change passes" --evidence trammel:.trammel/store
-adsertio view
+```json
+{
+  "mcpServers": {
+    "adsertio": {
+      "command": "adsertio-mcp",
+      "args": [],
+      "env": { "ADSERTIO_DIR": "/absolute/path/to/project/.adsertio" }
+    }
+  }
+}
 ```
 
-Evidence paths are resolved inside the project. Absolute paths, `..`, symlinks
-that leave the project, folders, files over 64 MiB and files that are not valid
-UTF-8 are `unreadable`, never read.
+`ADSERTIO_DIR` is only needed when the host does not start the server inside the project.
 
-Not built yet: the three adapters, attaching evidence to an existing claim,
-freshness (evidence older than the claim or the commit), release binaries and npm
-packages. SPEC.md describes each.
+| Tool | Does |
+|---|---|
+| `adsertio_claim` | Record a claim. Never overwrites. |
+| `adsertio_attach` | Add pointers to an existing claim. A bad or duplicate pointer writes nothing. |
+| `adsertio_view` | Verdict and the state of every pointer. |
+| `adsertio_ls` | Id, summary, and pointer count. No verdict. |
 
-## Built to fail loudly
+The same names without the `adsertio_` prefix are CLI commands, plus `init`, `check`, and `mcp`.
 
-Designed out from the start and covered by tests in `tests/`:
+Per pointer the state is `pass`, `fail`, `missing`, `unreadable`, `no_adapter`, `inconclusive`, or `stale`. Per claim:
 
-- Deeply nested JSON, invalid UTF-8, oversized lines and batches get a JSON-RPC
-  error. The server keeps running.
-- Unknown methods are errors. A failed tool call sets `isError`.
-- Unknown or misspelled arguments are errors, never ignored.
-- A damaged claim is an error naming the file. It is never skipped and the view
-  is never empty because of it.
-- Claim ids are slugs; evidence paths that leave the project are refused.
-- Every write lands whole through a temp file cleaned up on failure; a claim is
-  created with a hard link and never overwrites.
-- A mistake in the `agent-tools` line falls back to the core tools and says why.
+- **verified**: there is evidence and every pointer passed
+- **refuted**: any pointer failed
+- **unverified**: everything else
+
+No claim is verified without a passing adapter result.
 
 ## Choosing tool groups
 
-Add a line to the `agent-tools` block in the project's AGENTS.md; the server
-rereads it on every request. Today there is one group, `core`, which cannot be
-switched off, so the block is ready for later groups. See
-[AGENTS.snippet.md](AGENTS.snippet.md).
+Add a line to the `agent-tools` block in the project's AGENTS.md. The server rereads it on every request. There is one group, `core`, and it cannot be switched off. A mistake in the line falls back to the core tools and says why. See [AGENTS.snippet.md](AGENTS.snippet.md).
+
+````markdown
+```agent-tools
+adsertio: tools core
+```
+````
+
+## Built to fail loudly
+
+Covered by tests in `tests/`:
+
+- Deeply nested JSON, invalid UTF-8, oversized lines, and batches get a JSON-RPC error. The server keeps running.
+- Unknown methods are errors. A failed tool call sets `isError`. A panicking tool is contained.
+- Unknown or misspelled arguments are errors.
+- A damaged claim fails the whole view and the whole list. It is never skipped, and the store is never reset.
+- Evidence paths that leave the project, folders (except a Probatio output folder), files over 64 MiB, and files that are not valid UTF-8 are `unreadable`.
+- A file that starts with the SQLite header is `unreadable`, with a hint to run `trammel migrate` or `chisel migrate`. There is no SQLite reader. The live stores are JSON.
+- A damaged Trammel or Chisel snapshot is `unreadable`, not an empty pass. A Trammel journal line that is not valid JSON fails the read. A Chisel compact table that cannot be expanded fails the read.
+- A broken Probatio `results/*.json` makes that run `unreadable`. It is not dropped.
+- Writes to `.adsertio/` land whole through a temp file. A new claim never overwrites. Attach replaces only that one claim file.
+- The reader takes a shared lock when `.trammel/lock` or `.chisel/chisel.lock` already exists, and it does not create those files or delete `store.tmp` or a journal.
 
 ## Build and test
 
 ```sh
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 cargo build --release --locked
 ```
 
-Rust 1.83. `Cargo.toml` has no dependencies; `tests/zero_deps.rs` checks it.
+Rust 1.83. `Cargo.toml` has no dependencies. `tests/zero_deps.rs` checks that, and `Cargo.lock` holds one package.
 
 ## Licence
 
