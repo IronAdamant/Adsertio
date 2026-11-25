@@ -3,12 +3,15 @@
 This project uses Adsertio (`.adsertio/`). A claim is one line saying something
 is true, with pointers to proof that Trammel, Chisel or Probatio left on disk.
 
-- Record a claim with `adsertio_claim`. Point at evidence as `tool:path`, for
-  example `trammel:.trammel/store`. Do not paste results in.
+- Record a claim with `adsertio_claim`. Point at evidence as `tool:path#selector`,
+  for example `trammel:.trammel/store#plan-1/step-1`. Do not paste results in.
+- Add a pointer later with `adsertio_attach`. A bad pointer is rejected.
 - Call `adsertio_view` to see each claim as verified, refuted or unverified.
+- `adsertio_ls` lists claims without reading the evidence and does not report a
+  verdict.
 - Do not tell anyone a claim is verified unless `adsertio_view` says so. A claim
-  with no evidence, missing evidence, or evidence marked `no_adapter` is
-  unverified.
+  with no evidence, missing evidence, or evidence marked `unreadable`,
+  `no_adapter`, `inconclusive`, or `stale` is unverified.
 
 Choose tool groups with a line in the `agent-tools` block of AGENTS.md:
 
