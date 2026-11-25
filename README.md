@@ -80,12 +80,15 @@ Pointers are `tool:path[#selector]`. The tool is `trammel`, `chisel`, or `probat
 |---|---|
 | `trammel:.trammel/store#plan-<id>/step-<id>` | that step's `verification.passed` is true |
 | `trammel:.trammel/store#plan-<id>` | every step of the plan passed, and there is at least one |
+| `trammel:.trammel/store#constraint-<id>` | the constraint exists and is not marked inactive |
+| `trammel:.trammel/store#failure-<id>` | the failure record exists |
 | `chisel:.chisel/store#test:<test_id>` | the latest result for that test passed |
 | `chisel:.chisel/store#file:<path>` | every test that touches that file last passed, and at least one does |
 | `probatio:<out>#survivors` (or no selector) | at least one mutant was killed, none survived, none was `flaky` or `error`, and every mutant in the run has a result |
 | `probatio:<out>#mutant:<id>` | that mutant's outcome is `killed` |
+| `probatio:<out>#ledger` | never: an unchecked ledger is not proof |
 
-A pass recorded before the claim was written, or against a commit that is not `HEAD`, does not verify the claim. A failure still refutes it. `git rev-parse HEAD` is the only external program, and only for that check.
+A pass recorded before the claim was written, or against a commit that is not `HEAD`, does not verify the claim. A failure still refutes it. Probatio records no time or commit, so a Probatio pass is never stale: an old run can still verify a new claim, and the detail says `no timestamp`. `git rev-parse HEAD` is the only external program, and only for that check.
 
 ## MCP tools
 
@@ -158,8 +161,9 @@ Covered by tests in `tests/`:
 - Evidence paths that leave the project, folders (except a Probatio output folder), files over 64 MiB, and files that are not valid UTF-8 are `unreadable`.
 - A file that starts with the SQLite header is `unreadable`, with a hint to run `trammel migrate` or `chisel migrate`. There is no SQLite reader. The live stores are JSON.
 - A damaged Trammel or Chisel snapshot is `unreadable`, not an empty pass. A Trammel journal line that is not valid JSON fails the read. A Chisel compact table that cannot be expanded fails the read.
-- A broken Probatio `results/*.json` makes that run `unreadable`. It is not dropped.
-- Writes to `.adsertio/` land whole through a temp file. A new claim never overwrites. Attach replaces only that one claim file.
+- A broken Probatio `results/*.json` makes that run `unreadable`. It is not dropped. An outcome Probatio does not write is `unreadable` too. A `flaky` or `error` result, or a run with fewer results than its mutant list, is `inconclusive`, not a pass.
+- A Chisel root store pointer reads the shards however its path is spelt (`./`, `//`, or through a symlinked folder), so a failing shard result is never hidden.
+- Writes to `.adsertio/` land whole through a temp file. A new claim never overwrites. Attach replaces only that one claim file, under a lock. A lock left by a killed attach is taken over by exactly one writer, so concurrent attaches never lose a pointer.
 - The reader takes a shared lock when `.trammel/lock` or `.chisel/chisel.lock` already exists, and it does not create those files or delete `store.tmp` or a journal.
 
 ## Build and test
