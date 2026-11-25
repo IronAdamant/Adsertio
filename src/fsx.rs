@@ -23,7 +23,12 @@ impl Drop for TempGuard {
 }
 
 const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
-const LOCK_STALE: std::time::Duration = std::time::Duration::from_secs(30);
+const LOCK_OWN_PID: u64 = 30;
+const LOCK_GRACE: u64 = 1;
+const TEMP_ABANDON: u64 = 30;
+/// A file time a couple of seconds ahead is clock skew, not a lock planted
+/// in the future. Farther than this, and no live pid, the lock is not held.
+const CLOCK_SKEW: std::time::Duration = std::time::Duration::from_secs(2);
 
 struct HeldLock {
     path: PathBuf,
@@ -37,13 +42,18 @@ impl Drop for HeldLock {
 
 /// Hold an exclusive lock file for a read-modify-write.
 ///
-/// The lock is an atomic `create_new`. A lock older than 30 seconds is stale
-/// (the holder died) and is removed. If another live writer still holds it
-/// after 5 seconds, this returns an error and does not run `body`.
+/// The lock is an atomic `create_new`. The file's first line is this process
+/// id. A lock whose pid is not running is removed at once, as is a lock with
+/// no pid once it is a second old, and a lock whose mtime is in the future
+/// when no live pid holds it. A live pid is left alone: after 5 seconds this
+/// returns an error and does not run `body`.
 pub fn with_claim_lock<T>(
     lock: &Path,
     body: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
+    if let Some(dir) = lock.parent() {
+        sweep_abandoned_temps(dir);
+    }
     let started = std::time::Instant::now();
     loop {
         match OpenOptions::new().write(true).create_new(true).open(lock) {
@@ -57,6 +67,7 @@ pub fn with_claim_lock<T>(
                         .map(|d| d.as_secs())
                         .unwrap_or(0)
                 );
+                let _ = file.sync_all();
                 let held = HeldLock {
                     path: lock.to_path_buf(),
                 };
@@ -65,7 +76,7 @@ pub fn with_claim_lock<T>(
                 return result;
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                if lock_is_stale(lock) {
+                if !lock_held(lock) {
                     let _ = fs::remove_file(lock);
                     continue;
                 }
@@ -82,8 +93,143 @@ pub fn with_claim_lock<T>(
     }
 }
 
+/// `true` when a live process still holds `lock`. A missing file is not held.
+pub fn lock_held(lock: &Path) -> bool {
+    let age = file_age(lock);
+    if matches!(age, Age::Missing) {
+        return false;
+    }
+    let text = fs::read_to_string(lock).unwrap_or_default();
+    match crate::proc::leading_pid(&text) {
+        Some(pid) if crate::proc::pid_alive(pid) => {
+            pid != std::process::id() || !own_pid_is_leftover(&age)
+        }
+        Some(_) => false,
+        // No pid yet: the holder may still be writing the line. A mtime a
+        // moment ahead is the same window. An hour ahead is not.
+        None => within_grace(&age),
+    }
+}
+
+fn within_grace(age: &Age) -> bool {
+    match age {
+        Age::Secs(secs) => *secs < LOCK_GRACE,
+        Age::Future(ahead) => *ahead < CLOCK_SKEW,
+        Age::Missing => false,
+    }
+}
+
+/// This process is not inside the lock. A file that names us and is old, or
+/// far in the future, is a reused pid or a planted time.
+fn own_pid_is_leftover(age: &Age) -> bool {
+    match age {
+        Age::Secs(secs) => *secs >= LOCK_OWN_PID,
+        Age::Future(ahead) => *ahead >= CLOCK_SKEW,
+        Age::Missing => true,
+    }
+}
+
+/// `true` when `lock` should be removed rather than waited on.
 pub fn lock_file_is_stale(lock: &Path) -> bool {
-    lock_is_stale(lock)
+    lock.exists() && !lock_held(lock)
+}
+
+/// Delete temp files in `dir` whose writer is gone. A temp whose name does
+/// not carry a pid is removed once it is 30 seconds old, or at once when its
+/// mtime is in the future. A live writer's temp is left in place.
+pub fn sweep_abandoned_temps(dir: &Path) {
+    let Ok(rd) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in rd.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !(name.starts_with('.') && name.contains(".tmp-")) {
+            continue;
+        }
+        if temp_abandoned(entry.path().as_path(), &name) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+fn temp_abandoned(path: &Path, name: &str) -> bool {
+    if let Some(pid) = temp_pid(name) {
+        return !crate::proc::pid_alive(pid);
+    }
+    match file_age(path) {
+        Age::Future(ahead) if ahead >= CLOCK_SKEW => true,
+        Age::Secs(secs) if secs >= TEMP_ABANDON => true,
+        _ => false,
+    }
+}
+
+/// `.{file}.tmp-{pid}-{n}` -> pid.
+fn temp_pid(name: &str) -> Option<u32> {
+    let rest = name.rsplit_once(".tmp-")?.1;
+    let (pid, n) = rest.rsplit_once('-')?;
+    if pid.is_empty() || !pid.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let pid: u32 = pid.parse().ok()?;
+    if pid == 0 {
+        None
+    } else {
+        Some(pid)
+    }
+}
+
+enum Age {
+    Missing,
+    /// How far the mtime is ahead of now.
+    Future(std::time::Duration),
+    Secs(u64),
+}
+
+fn file_age(path: &Path) -> Age {
+    let Ok(meta) = fs::metadata(path) else {
+        return Age::Missing;
+    };
+    match meta.modified() {
+        Ok(when) => match when.elapsed() {
+            Ok(age) => Age::Secs(age.as_secs()),
+            Err(error) => Age::Future(error.duration()),
+        },
+        Err(_) => Age::Future(CLOCK_SKEW),
+    }
+}
+
+/// Replace `dest` with `tmp`. On Windows a just-closed file can refuse the
+/// replace for a moment (`Access is denied` or a sharing violation). Retry
+/// that, and leave any other error as a failure.
+fn replace_file(tmp: &Path, dest: &Path) -> Result<(), String> {
+    let mut last = None;
+    for attempt in 0..8 {
+        match fs::rename(tmp, dest) {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt < 7 && replace_busy(&error) => {
+                last = Some(error);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(error) => {
+                return Err(format!("cannot replace {}: {error}", dest.display()));
+            }
+        }
+    }
+    Err(format!(
+        "cannot replace {}: {}",
+        dest.display(),
+        last.map(|error| error.to_string())
+            .unwrap_or_else(|| "the file stayed busy".into())
+    ))
+}
+
+fn replace_busy(error: &std::io::Error) -> bool {
+    // Windows: ERROR_ACCESS_DENIED is 5, ERROR_SHARING_VIOLATION is 32.
+    cfg!(windows) && matches!(error.raw_os_error(), Some(5 | 32))
 }
 
 /// Why `meta` is not something a pointer can read.
@@ -106,16 +252,6 @@ fn is_fifo(meta: &fs::Metadata) -> bool {
 #[cfg(not(unix))]
 fn is_fifo(_meta: &fs::Metadata) -> bool {
     false
-}
-
-fn lock_is_stale(lock: &Path) -> bool {
-    let Ok(meta) = fs::metadata(lock) else {
-        return true;
-    };
-    meta.modified()
-        .ok()
-        .and_then(|when| when.elapsed().ok())
-        .is_some_and(|age| age >= LOCK_STALE)
 }
 
 /// Write `bytes` to `dest` whole: a temp file beside it, synced, then either
@@ -149,7 +285,7 @@ pub fn write_atomic(dest: &Path, bytes: &[u8], overwrite: bool) -> Result<(), St
             .map_err(|e| format!("cannot sync {}: {e}", tmp.display()))?;
     }
     if overwrite {
-        fs::rename(&tmp, dest).map_err(|e| format!("cannot replace {}: {e}", dest.display()))?;
+        replace_file(&tmp, dest)?;
         guard.armed = false;
     } else {
         match fs::hard_link(&tmp, dest) {

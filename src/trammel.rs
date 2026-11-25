@@ -10,7 +10,6 @@
 //! does not fail when the row is absent.
 
 use crate::claim;
-use crate::json::Value;
 use crate::read::{self, ReadError};
 use crate::verdict::{Evidence, State};
 use std::path::Path;
@@ -31,10 +30,11 @@ pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
         Some((rel, selector)) => (rel, selector),
         None => (rest, ""),
     };
-    let doc = match crate::cache::trammel(project, rel, || {
-        read::read_trammel(project, rel).map(|snapshot| snapshot.doc)
+    let index = match crate::cache::trammel(project, rel, || {
+        let loaded = read::load_trammel_text(project, rel)?;
+        crate::trammel_idx::parse(&loaded.text, rel)
     }) {
-        Ok(doc) => doc,
+        Ok(index) => index,
         Err(ReadError::Missing(text)) => return evidence(pointer, State::Missing, text),
         Err(ReadError::Unreadable(text)) => return evidence(pointer, State::Unreadable, text),
     };
@@ -49,14 +49,13 @@ pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
         Ok(sel) => sel,
         Err(text) => return evidence(pointer, State::Unreadable, text),
     };
-    let (at, commits, malformed) = freshness(&doc, &sel);
-    match judge(&doc, sel) {
-        Ok((state, detail)) => {
+    match judge(&index, sel) {
+        Ok((state, detail, stamp)) => {
             let mut found = evidence(pointer, state, detail);
             if found.state == State::Pass {
-                found.at = at;
-                found.commits = commits;
-                found.malformed = malformed;
+                found.at = stamp.at;
+                found.commits = stamp.commits;
+                found.malformed = stamp.malformed;
             }
             found
         }
@@ -106,208 +105,99 @@ fn parse_id(text: &str) -> Result<i64, String> {
         .map_err(|_| format!("\"{text}\" is not an id"))
 }
 
-fn judge(doc: &Value, sel: Sel) -> Result<(State, String), String> {
+fn judge(
+    index: &crate::trammel_idx::Index,
+    sel: Sel,
+) -> Result<(State, String, crate::trammel_idx::Stamp), String> {
+    let bare = crate::trammel_idx::Stamp {
+        at: None,
+        commits: Vec::new(),
+        malformed: false,
+    };
     match sel {
-        Sel::Step { plan, step } => step_state(doc, plan, step),
-        Sel::Plan(plan) => plan_state(doc, plan),
-        Sel::Constraint(id) => constraint_state(doc, id),
-        Sel::Failure(id) => failure_state(doc, id),
-    }
-}
-
-fn rows<'a>(doc: &'a Value, name: &str) -> Result<Vec<&'a Value>, String> {
-    let Some(items) = doc.get(name).and_then(Value::as_array) else {
-        return Err(format!(
-            "missing {name}, or it is not an array. A damaged store is not treated as empty"
-        ));
-    };
-    for (index, item) in items.iter().enumerate() {
-        if !matches!(item, Value::Object(_)) {
-            return Err(format!("{name}[{index}] is not an object"));
-        }
-    }
-    Ok(items.iter().collect())
-}
-
-fn id_is(row: &Value, field: &str, id: i64) -> bool {
-    row.get(field).and_then(Value::as_i64) == Some(id)
-}
-
-fn step_state(doc: &Value, plan: i64, step: i64) -> Result<(State, String), String> {
-    let found = rows(doc, "steps")?
-        .into_iter()
-        .find(|row| id_is(row, "id", step) && id_is(row, "plan_id", plan));
-    let Some(row) = found else {
-        return Ok((
-            State::Missing,
-            format!("plan {plan} step {step} is not in the store"),
-        ));
-    };
-    Ok(verification(row, &format!("plan {plan} step {step}")))
-}
-
-fn verification(row: &Value, what: &str) -> (State, String) {
-    match row.get("verification") {
-        None => (State::Missing, format!("{what} is not yet verified")),
-        Some(Value::Object(_)) => match row
-            .get("verification")
-            .and_then(|v| v.get("passed"))
-            .and_then(Value::as_bool)
-        {
-            Some(true) => (State::Pass, format!("{what} verification.passed is true")),
-            _ => (
-                State::Fail,
-                format!("{what} verification.passed is not true"),
-            ),
-        },
-        Some(_) => (
-            State::Unreadable,
-            format!("{what} verification is not an object"),
-        ),
-    }
-}
-
-fn plan_state(doc: &Value, plan: i64) -> Result<(State, String), String> {
-    let steps: Vec<&Value> = rows(doc, "steps")?
-        .into_iter()
-        .filter(|row| id_is(row, "plan_id", plan))
-        .collect();
-    if steps.is_empty() {
-        let known = rows(doc, "plans")?.iter().any(|row| id_is(row, "id", plan));
-        let detail = if known {
-            format!("plan {plan} has no steps")
-        } else {
-            format!("plan {plan} is not in the store")
-        };
-        return Ok((State::Missing, detail));
-    }
-    let mut failed = 0usize;
-    let mut waiting = 0usize;
-    for row in &steps {
-        match row.get("verification") {
-            None => waiting += 1,
-            Some(Value::Object(_)) => {
-                if row
-                    .get("verification")
-                    .and_then(|v| v.get("passed"))
-                    .and_then(Value::as_bool)
-                    != Some(true)
-                {
-                    failed += 1;
+        Sel::Step { plan, step } => {
+            let hit = index.step(plan, step)?;
+            let what = format!("plan {plan} step {step}");
+            let (state, detail) = match hit.kind {
+                crate::trammel_idx::StepKind::NotInStore => (
+                    State::Missing,
+                    format!("plan {plan} step {step} is not in the store"),
+                ),
+                crate::trammel_idx::StepKind::NotVerified => {
+                    (State::Missing, format!("{what} is not yet verified"))
                 }
-            }
-            Some(_) => {
-                return Ok((
+                crate::trammel_idx::StepKind::Bad => (
+                    State::Unreadable,
+                    format!("{what} verification is not an object"),
+                ),
+                crate::trammel_idx::StepKind::Fail => (
+                    State::Fail,
+                    format!("{what} verification.passed is not true"),
+                ),
+                crate::trammel_idx::StepKind::Pass => {
+                    (State::Pass, format!("{what} verification.passed is true"))
+                }
+            };
+            Ok((state, detail, hit.stamp))
+        }
+        Sel::Plan(plan) => {
+            let hit = index.plan(plan)?;
+            let (state, detail) = match hit.kind {
+                crate::trammel_idx::PlanKind::Unknown => {
+                    (State::Missing, format!("plan {plan} is not in the store"))
+                }
+                crate::trammel_idx::PlanKind::NoSteps => {
+                    (State::Missing, format!("plan {plan} has no steps"))
+                }
+                crate::trammel_idx::PlanKind::Bad => (
                     State::Unreadable,
                     format!("plan {plan} has a verification that is not an object"),
+                ),
+                crate::trammel_idx::PlanKind::Fail { failed } => (
+                    State::Fail,
+                    format!(
+                        "plan {plan} has {failed} step(s) whose verification.passed is not true"
+                    ),
+                ),
+                crate::trammel_idx::PlanKind::Waiting { waiting } => (
+                    State::Missing,
+                    format!("plan {plan} has {waiting} step(s) not yet verified"),
+                ),
+                crate::trammel_idx::PlanKind::Pass { steps } => (
+                    State::Pass,
+                    format!(
+                        "plan {plan} has {steps} step(s) and every verification.passed is true"
+                    ),
+                ),
+            };
+            Ok((state, detail, hit.stamp))
+        }
+        Sel::Constraint(id) => match index.constraint(id)? {
+            crate::trammel_idx::ConstraintKind::Missing => Ok((
+                State::Missing,
+                format!("constraint {id} is not in the store"),
+                bare,
+            )),
+            crate::trammel_idx::ConstraintKind::Active => {
+                Ok((State::Pass, format!("constraint {id} is active"), bare))
+            }
+            crate::trammel_idx::ConstraintKind::Inactive => {
+                Ok((State::Fail, format!("constraint {id} is inactive"), bare))
+            }
+            crate::trammel_idx::ConstraintKind::Bad => {
+                Err(format!("constraint {id} active is not a boolean"))
+            }
+        },
+        Sel::Failure(id) => {
+            if index.failure(id)? {
+                Ok((State::Pass, format!("failure {id} is recorded"), bare))
+            } else {
+                Ok((
+                    State::Missing,
+                    format!("failure {id} is not in the store"),
+                    bare,
                 ))
             }
         }
-    }
-    if failed > 0 {
-        Ok((
-            State::Fail,
-            format!("plan {plan} has {failed} step(s) whose verification.passed is not true"),
-        ))
-    } else if waiting > 0 {
-        Ok((
-            State::Missing,
-            format!("plan {plan} has {waiting} step(s) not yet verified"),
-        ))
-    } else {
-        Ok((
-            State::Pass,
-            format!(
-                "plan {plan} has {} step(s) and every verification.passed is true",
-                steps.len()
-            ),
-        ))
-    }
-}
-
-fn constraint_state(doc: &Value, id: i64) -> Result<(State, String), String> {
-    let Some(row) = rows(doc, "constraints")?
-        .into_iter()
-        .find(|row| id_is(row, "id", id))
-    else {
-        return Ok((
-            State::Missing,
-            format!("constraint {id} is not in the store"),
-        ));
-    };
-    match row.get("active") {
-        None | Some(Value::Bool(true)) => Ok((State::Pass, format!("constraint {id} is active"))),
-        Some(Value::Bool(false)) => Ok((State::Fail, format!("constraint {id} is inactive"))),
-        Some(_) => Err(format!("constraint {id} active is not a boolean")),
-    }
-}
-
-fn freshness(doc: &Value, sel: &Sel) -> (Option<f64>, Vec<String>, bool) {
-    match sel {
-        Sel::Step { plan, step } => {
-            let Ok(steps) = rows(doc, "steps") else {
-                return (None, Vec::new(), false);
-            };
-            let Some(row) = steps
-                .into_iter()
-                .find(|row| id_is(row, "id", *step) && id_is(row, "plan_id", *plan))
-            else {
-                return (None, Vec::new(), false);
-            };
-            stamp(row.get("verification"))
-        }
-        Sel::Plan(plan) => {
-            let Ok(steps) = rows(doc, "steps") else {
-                return (None, Vec::new(), false);
-            };
-            let mut at = None;
-            let mut commits = Vec::new();
-            let mut malformed = false;
-            for row in steps.into_iter().filter(|row| id_is(row, "plan_id", *plan)) {
-                let (step_at, step_commits, bad) = stamp(row.get("verification"));
-                at = older(at, step_at);
-                commits.extend(step_commits);
-                malformed |= bad;
-            }
-            (at, commits, malformed)
-        }
-        Sel::Constraint(_) | Sel::Failure(_) => (None, Vec::new(), false),
-    }
-}
-
-fn stamp(value: Option<&Value>) -> (Option<f64>, Vec<String>, bool) {
-    let Some(value) = value else {
-        return (None, Vec::new(), false);
-    };
-    let (at, bad_time) = crate::fresh::read_time(value.get("at"));
-    if bad_time {
-        return (None, Vec::new(), true);
-    }
-    let (commit, bad_commit) = crate::fresh::read_commit(value.get("commit"));
-    if bad_commit {
-        return (at, Vec::new(), true);
-    }
-    match commit {
-        Some(text) => (at, vec![text], false),
-        None => (at, Vec::new(), false),
-    }
-}
-
-fn older(left: Option<f64>, right: Option<f64>) -> Option<f64> {
-    match (left, right) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (Some(a), None) => Some(a),
-        (None, b) => b,
-    }
-}
-
-fn failure_state(doc: &Value, id: i64) -> Result<(State, String), String> {
-    if rows(doc, "failures")?
-        .into_iter()
-        .any(|row| id_is(row, "id", id))
-    {
-        Ok((State::Pass, format!("failure {id} is recorded")))
-    } else {
-        Ok((State::Missing, format!("failure {id} is not in the store")))
     }
 }

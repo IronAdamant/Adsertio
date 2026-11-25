@@ -203,6 +203,20 @@ impl Claim {
     }
 }
 
+/// `created/id`, the cursor `view --after` passes back.
+pub fn cursor(claim: &Claim) -> String {
+    format!("{}/{}", claim.created, claim.id)
+}
+
+/// `true` when `claim` sorts strictly after `(created, id)`.
+pub fn is_after(claim: &Claim, created: &str, id: &str) -> bool {
+    match claim.created.as_str().cmp(created) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => cmp_id(&claim.id, id) == std::cmp::Ordering::Greater,
+    }
+}
+
 /// Compare ids with number runs as integers, so `c2` comes before `c10`.
 fn cmp_id(left: &str, right: &str) -> std::cmp::Ordering {
     let left = left.as_bytes();
@@ -263,6 +277,7 @@ pub fn load_all(store: &Store) -> Result<Vec<Claim>, String> {
         }
         Err(e) => return Err(format!("cannot read {}: {e}", dir.display())),
     }
+    fsx::sweep_abandoned_temps(&dir);
     let rd = match fs::read_dir(&dir) {
         Ok(r) => r,
         Err(e) => return Err(format!("cannot read {}: {e}", dir.display())),

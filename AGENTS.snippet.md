@@ -9,8 +9,9 @@ is true, with pointers to proof that Trammel, Chisel or Probatio left on disk.
 - Call `adsertio_view` to see each claim as verified, refuted or unverified.
 - `adsertio_ls` lists claims without reading the evidence and does not report a
   verdict. With no `limit`, `adsertio_ls` and `adsertio_view` return every
-  matching claim. Pass `limit` (maximum 500) and `offset` to page. `count` and
-  `counts` cover the whole store.
+  matching claim. Pass `limit` (maximum 500) to page, and for a view follow
+  `hint`, which passes `after`. `count` on `adsertio_ls` is the whole store.
+  `counts` on a view page covers the claims that page judged.
 - Call `adsertio_guide` for pointer shapes and for what to do after the
   conversation is compacted. Do not repeat a verdict from memory.
 - Do not tell anyone a claim is verified unless `adsertio_view` says so. A claim

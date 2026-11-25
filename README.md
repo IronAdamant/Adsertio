@@ -72,7 +72,7 @@ evidence: [trammel:.trammel/store#plan-1/step-1]
 ---
 ```
 
-There is no `verdict` field. `adsertio view` computes it. `adsertio ls` lists id, summary, and pointer count, and does not read the evidence. With no `limit` or `offset`, both return every matching claim. Pass `limit` (1 to 500) and `offset` to page. When `truncated` is true, `hint` gives the next call and `next_offset` is the offset to pass. `count` and `counts` still cover the whole store. `adsertio view --states` keeps one or more of verified, refuted, and unverified. `--compact` drops evidence detail. `adsertio guide` (MCP name `adsertio_guide`) is the short reminder of pointer shapes and what to call after a conversation is compacted.
+There is no `verdict` field. `adsertio view` computes it. `adsertio ls` lists id, summary, and pointer count, and does not read the evidence. With no `limit`, both return every matching claim. Pass `limit` (1 to 500) to page. For `view`, follow `hint`: it passes `after`, the `next_after` cursor (`created/id`). Claims are ordered by `created`, then by id. A verdict that changes behind the cursor does not skip a later claim. `offset` still skips a count of matches and can skip one when a verdict changes. `counts` on a page covers the claims that page judged, and `counts_complete` says whether that is the whole scope. `count` on `ls` is still the whole store. `adsertio view --states` keeps one or more of verified, refuted, and unverified. `--compact` drops evidence detail. `adsertio guide` (MCP name `adsertio_guide`) is the short reminder of pointer shapes and what to call after a conversation is compacted.
 
 Pointers are `tool:path[#selector]`. The tool is `trammel`, `chisel`, or `probatio`. The path is inside the project. Selectors are in [SPEC.md](SPEC.md). In short:
 
@@ -109,9 +109,9 @@ Claude Code (`.mcp.json`) or Cursor (`.cursor/mcp.json`):
 |---|---|
 | `adsertio_claim` | Record a claim. Never overwrites. |
 | `adsertio_attach` | Add pointers to an existing claim. Returns the new count and the pointers just added. A bad or duplicate pointer writes nothing. |
-| `adsertio_view` | Verdict and the state of every pointer. Every match, unless limit or offset is set. |
+| `adsertio_view` | Verdict and the state of every pointer. Every match, unless limit is set. Page with `after`. |
 | `adsertio_ls` | Id, summary, and pointer count. No verdict. Every claim, unless limit or offset is set. |
-| `adsertio_check` | Fail on a damaged claim, a bad file name, a bad created time, a stale lock, or a malformed timestamp. |
+| `adsertio_check` | Fail on a damaged claim, a bad file name, a bad created time, or a malformed timestamp. Removes a lock or temp whose writer is gone. |
 | `adsertio_guide` | Pointer shapes, the verdict rule, paging, and what to call after compaction. |
 
 The same names without the `adsertio_` prefix are CLI commands, plus `init` and `mcp`.
@@ -133,6 +133,19 @@ Add a line to the `agent-tools` block in the project's AGENTS.md. The server rer
 adsertio: tools core
 ```
 ````
+
+## 1.2.0 on a large store
+
+Measured on Linux 6.12.113+ x86_64, Intel Xeon, MemTotal 16387328 kB, rustc 1.83.0. Release builds, one run each. RSS is `VmHWM`. The 100,000-step Trammel file was 14.9 MiB and the 200,000-result Chisel file was 11.5 MiB. Claim `i` pointed at one step and one test in those files. The full table is in [docs/perf/1.2.0.md](docs/perf/1.2.0.md).
+
+| Case | 1.1.1 | 1.2.0 | RSS 1.1.1 | RSS 1.2.0 |
+|---|---:|---:|---:|---:|
+| `view --limit 500`, 20,000 claims, 100,000 steps / 200,000 results | 249.086 s | 0.480 s | 238 MiB | 72 MiB |
+| `check`, 1,000 claims, same evidence | 199.101 s | 0.337 s | 153 MiB | 63 MiB |
+| `view`, 32 claims, one 63 MiB Trammel file | 0.353 s | 0.133 s | 191 MiB | 129 MiB |
+| `view` with no limit, 20,000 claims, 100,000 / 200,000 |  | 0.503 s |  | 72 MiB |
+
+The view drop is the per-snapshot index, and a page that judges only the claims it returns. 1.1.1 judged every claim on every page, and each selector scanned every row. The check drop is that same index, reused for the call, with no git. The 63 MiB file is still read whole. 1.2.0 does not keep the long `command` string, so RSS went from 191 MiB to 129 MiB. A full view of the 20,000-claim store took 0.503 s, next to the 0.480 s page, because both build the index once. `--limit 1` does not skip reading the snapshots.
 
 ## Built to fail loudly
 

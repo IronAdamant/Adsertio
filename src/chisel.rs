@@ -10,7 +10,6 @@
 //! file and every such test's latest result passed.
 
 use crate::claim;
-use crate::json::Value;
 use crate::read::{self, ReadError};
 use crate::verdict::{Evidence, State};
 use std::fs;
@@ -44,8 +43,8 @@ pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
             "worktree overlays under .chisel/overlays are not read in v1, so this is not proof",
         );
     }
-    let docs = match crate::cache::chisel(project, rel, || load(project, rel)) {
-        Ok(docs) => docs,
+    let index = match crate::cache::chisel(project, rel, || load_index(project, rel)) {
+        Ok(index) => index,
         Err(ReadError::Missing(text)) => return evidence(pointer, State::Missing, text),
         Err(ReadError::Unreadable(text)) => return evidence(pointer, State::Unreadable, text),
     };
@@ -60,14 +59,13 @@ pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
         Ok(sel) => sel,
         Err(text) => return evidence(pointer, State::Unreadable, text),
     };
-    let (at, commits, malformed) = freshness(&docs, &sel);
-    match judge(&docs, sel) {
-        Ok((state, detail)) => {
+    match judge(&index, sel) {
+        Ok((state, detail, stamp)) => {
             let mut found = evidence(pointer, state, detail);
             if found.state == State::Pass {
-                found.at = at;
-                found.commits = commits;
-                found.malformed = malformed;
+                found.at = stamp.at;
+                found.commits = stamp.commits;
+                found.malformed = stamp.malformed;
             }
             found
         }
@@ -124,32 +122,19 @@ fn parse_selector(selector: &str) -> Result<Sel, String> {
     ))
 }
 
-/// Same shape Chisel stores. `tests/a.rs::t1` and `tests/a.rs:t1` meet.
-fn normalize_test_id(id: &str) -> String {
-    let id = id.trim();
-    let Some((path, rest)) = id.split_once("::") else {
-        return id.to_string();
-    };
-    if path.contains('/') || path.contains('.') {
-        format!("{path}:{}", rest.replace("::", "."))
-    } else {
-        id.replace("::", ":")
-    }
-}
-
-fn load(project: &Path, rel: &str) -> Result<Vec<Value>, ReadError> {
-    let mut docs = vec![read::read_chisel(project, rel)?.doc];
+fn load_index(project: &Path, rel: &str) -> Result<crate::chisel_idx::Index, ReadError> {
+    let mut index = crate::chisel_idx::parse_file(project, rel)?;
     if !is_root_store(rel) {
-        return Ok(docs);
+        return Ok(index);
     }
     for rel_store in shard_stores(project)? {
-        match read::read_chisel(project, &rel_store) {
-            Ok(snapshot) => docs.push(snapshot.doc),
+        match crate::chisel_idx::parse_file(project, &rel_store) {
+            Ok(part) => index.merge(part),
             Err(ReadError::Missing(_)) => {}
             Err(error) => return Err(error),
         }
     }
-    Ok(docs)
+    Ok(index)
 }
 
 fn shard_stores(project: &Path) -> Result<Vec<String>, ReadError> {
@@ -208,93 +193,69 @@ fn shard_stores(project: &Path) -> Result<Vec<String>, ReadError> {
         .collect())
 }
 
-fn judge(docs: &[Value], sel: Sel) -> Result<(State, String), String> {
+fn judge(
+    index: &crate::chisel_idx::Index,
+    sel: Sel,
+) -> Result<(State, String, crate::chisel_idx::Stamp), String> {
     match sel {
-        Sel::Test(id) => test_state(docs, &id),
-        Sel::File(path) => file_state(docs, &path),
+        Sel::Test(id) => test_state(index, &id),
+        Sel::File(path) => file_state(index, &path),
     }
 }
 
-fn table<'a>(docs: &'a [Value], name: &str) -> Result<Vec<&'a Value>, String> {
-    let mut out = Vec::new();
-    for doc in docs {
-        let Some(items) = doc.get(name).and_then(Value::as_array) else {
-            return Err(format!(
-                "missing {name}, or it is not an array. A damaged store is not treated as empty"
-            ));
-        };
-        for (index, item) in items.iter().enumerate() {
-            if !matches!(item, Value::Object(_)) {
-                return Err(format!("{name}[{index}] is not an object"));
-            }
-            out.push(item);
-        }
-    }
-    Ok(out)
-}
-
-fn test_state(docs: &[Value], id: &str) -> Result<(State, String), String> {
-    let rows = table(docs, "test_results")?;
-    let Some(row) = latest(&rows, id) else {
-        return Ok((State::Missing, format!("test {id} has no result")));
+fn test_state(
+    index: &crate::chisel_idx::Index,
+    id: &str,
+) -> Result<(State, String, crate::chisel_idx::Stamp), String> {
+    let Some(hit) = index.test(id)? else {
+        return Ok((
+            State::Missing,
+            format!("test {id} has no result"),
+            crate::chisel_idx::Stamp::empty(),
+        ));
     };
-    Ok(result_state(row, id))
-}
-
-fn latest<'a>(rows: &[&'a Value], id: &str) -> Option<&'a Value> {
-    let want = normalize_test_id(id);
-    rows.iter()
-        .rev()
-        .find(|row| {
-            row.get("test_id")
-                .and_then(Value::as_str)
-                .is_some_and(|stored| normalize_test_id(stored) == want)
-        })
-        .copied()
-}
-
-fn result_state(row: &Value, id: &str) -> (State, String) {
-    match row.get("passed").and_then(Value::as_bool) {
+    let (state, detail) = match hit.passed {
         Some(true) => (State::Pass, format!("latest result for {id} passed")),
         Some(false) => (State::Fail, format!("latest result for {id} failed")),
         None => (
             State::Unreadable,
             format!("latest result for {id} has no boolean passed"),
         ),
-    }
+    };
+    Ok((state, detail, hit.stamp))
 }
 
-fn file_state(docs: &[Value], file: &str) -> Result<(State, String), String> {
-    let edges = table(docs, "test_edges")?;
-    let mut ids: Vec<String> = Vec::new();
-    for edge in edges {
-        let Some(code_id) = edge.get("code_id").and_then(Value::as_str) else {
-            return Err("a test edge has no code_id".into());
-        };
-        if !file_matches(code_id, file) {
-            continue;
-        }
-        let Some(test_id) = edge.get("test_id").and_then(Value::as_str) else {
-            return Err(format!("a test edge for {code_id} has no test_id"));
-        };
-        let test_id = normalize_test_id(test_id);
-        if !ids.iter().any(|known| known == &test_id) {
-            ids.push(test_id);
-        }
-    }
+fn file_state(
+    index: &crate::chisel_idx::Index,
+    file: &str,
+) -> Result<(State, String, crate::chisel_idx::Stamp), String> {
+    let ids = index.tests_for(file)?;
     if ids.is_empty() {
-        return Ok((State::Missing, format!("no test edge touches {file}")));
+        return Ok((
+            State::Missing,
+            format!("no test edge touches {file}"),
+            crate::chisel_idx::Stamp::empty(),
+        ));
     }
-    let rows = table(docs, "test_results")?;
     let mut failed: Vec<&str> = Vec::new();
     let mut waiting: Vec<&str> = Vec::new();
+    let mut stamp = crate::chisel_idx::Stamp::empty();
     for id in &ids {
-        match latest(&rows, id) {
+        match index.test(id)? {
             None => waiting.push(id),
-            Some(row) => match result_state(row, id) {
-                (State::Pass, _) => {}
-                (State::Fail, _) => failed.push(id),
-                (state, detail) => return Ok((state, detail)),
+            Some(hit) => match hit.passed {
+                Some(true) => merge_stamp(&mut stamp, &hit.stamp),
+                Some(false) => {
+                    failed.push(id);
+                    merge_stamp(&mut stamp, &hit.stamp);
+                }
+                None => {
+                    return Ok((
+                        State::Unreadable,
+                        format!("latest result for {id} has no boolean passed"),
+                        crate::chisel_idx::Stamp::empty(),
+                    ))
+                }
             },
         }
     }
@@ -302,6 +263,7 @@ fn file_state(docs: &[Value], file: &str) -> Result<(State, String), String> {
         Ok((
             State::Fail,
             format!("tests touching {file} failed: {}", failed.join(", ")),
+            stamp,
         ))
     } else if !waiting.is_empty() {
         Ok((
@@ -310,6 +272,7 @@ fn file_state(docs: &[Value], file: &str) -> Result<(State, String), String> {
                 "tests touching {file} have no result: {}",
                 waiting.join(", ")
             ),
+            stamp,
         ))
     } else {
         Ok((
@@ -318,111 +281,17 @@ fn file_state(docs: &[Value], file: &str) -> Result<(State, String), String> {
                 "{} test(s) touch {file} and the latest result of each passed",
                 ids.len()
             ),
+            stamp,
         ))
     }
 }
 
-fn freshness(docs: &[Value], sel: &Sel) -> (Option<f64>, Vec<String>, bool) {
-    match sel {
-        Sel::Test(id) => {
-            let Ok(rows) = table(docs, "test_results") else {
-                return (None, Vec::new(), false);
-            };
-            let Some(row) = latest(&rows, id) else {
-                return (None, Vec::new(), false);
-            };
-            stamp_row(docs, id, row)
-        }
-        Sel::File(path) => {
-            let Ok(edges) = table(docs, "test_edges") else {
-                return (None, Vec::new(), false);
-            };
-            let Ok(rows) = table(docs, "test_results") else {
-                return (None, Vec::new(), false);
-            };
-            let mut ids = Vec::new();
-            for edge in edges {
-                let Some(code_id) = edge.get("code_id").and_then(Value::as_str) else {
-                    continue;
-                };
-                if !file_matches(code_id, path) {
-                    continue;
-                }
-                if let Some(test_id) = edge.get("test_id").and_then(Value::as_str) {
-                    let test_id = normalize_test_id(test_id);
-                    if !ids.iter().any(|known| known == &test_id) {
-                        ids.push(test_id);
-                    }
-                }
-            }
-            let mut at = None;
-            let mut commits = Vec::new();
-            let mut malformed = false;
-            for id in ids {
-                if let Some(row) = latest(&rows, &id) {
-                    let (row_at, row_commits, bad) = stamp_row(docs, &id, row);
-                    at = older(at, row_at);
-                    commits.extend(row_commits);
-                    malformed |= bad;
-                }
-            }
-            (at, commits, malformed)
-        }
-    }
-}
-
-fn stamp_row(docs: &[Value], id: &str, row: &Value) -> (Option<f64>, Vec<String>, bool) {
-    let (at, bad_time) = crate::fresh::read_time(row.get("recorded_at"));
-    if bad_time {
-        return (None, Vec::new(), true);
-    }
-    let (direct, bad_commit) = crate::fresh::read_commit(row.get("commit"));
-    if bad_commit {
-        return (at, Vec::new(), true);
-    }
-    let commit = match direct {
-        Some(text) => Some(text),
-        None => match commit_from_passes(docs, id) {
-            Ok(text) => text,
-            Err(true) => return (at, Vec::new(), true),
-            Err(false) => None,
-        },
+fn merge_stamp(into: &mut crate::chisel_idx::Stamp, step: &crate::chisel_idx::Stamp) {
+    into.at = match (into.at, step.at) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(left), None) => Some(left),
+        (None, right) => right,
     };
-    match commit {
-        Some(text) => (at, vec![text], false),
-        None => (at, Vec::new(), false),
-    }
-}
-
-fn commit_from_passes(docs: &[Value], id: &str) -> Result<Option<String>, bool> {
-    let want = normalize_test_id(id);
-    for doc in docs {
-        let Some(Value::Object(pairs)) = doc.get("test_passes") else {
-            continue;
-        };
-        for (key, value) in pairs {
-            if normalize_test_id(key) == want {
-                let (commit, bad) = crate::fresh::read_commit(value.get("commit"));
-                return if bad { Err(true) } else { Ok(commit) };
-            }
-        }
-    }
-    Ok(None)
-}
-
-fn older(left: Option<f64>, right: Option<f64>) -> Option<f64> {
-    match (left, right) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (Some(a), None) => Some(a),
-        (None, b) => b,
-    }
-}
-
-fn file_matches(code_id: &str, file: &str) -> bool {
-    let code = code_id.replace('\\', "/");
-    let file = file.trim_matches('/');
-    if file.is_empty() {
-        return false;
-    }
-    code == file || code.starts_with(&format!("{file}:")) || code.starts_with(&format!("{file}/"))
+    into.commits.extend(step.commits.iter().cloned());
+    into.malformed |= step.malformed;
 }

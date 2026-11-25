@@ -1,24 +1,27 @@
-//! Parsed evidence kept for one `view` call.
+//! Parsed evidence kept for one `view` or `check` call.
 //!
-//! Many claims often point at the same snapshot. Reading it once per view is
-//! enough. The cache is off unless [`with_cache`] is on the stack, so a later
-//! read in the same process still sees a file that changed.
+//! Many claims often point at the same snapshot. Reading and indexing it once
+//! per call is enough. The cache is off unless [`with_cache`] is on the stack,
+//! so a later read in the same process still sees a file that changed.
 
-use crate::json::Value;
+use crate::chisel_idx;
 use crate::read::ReadError;
+use crate::trammel_idx;
 use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::sync::Arc;
 
-type DocHit = Result<Arc<Value>, ReadError>;
-type DocsHit = Result<Arc<Vec<Value>>, ReadError>;
+type TrammelHit = Result<Arc<trammel_idx::Index>, ReadError>;
+type ChiselHit = Result<Arc<chisel_idx::Index>, ReadError>;
 type RunHit = Result<Option<Arc<Vec<String>>>, ReadError>;
+type HeadHit = Result<String, String>;
 
 thread_local! {
     static ON: Cell<bool> = const { Cell::new(false) };
-    static TRAMMEL: RefCell<Vec<(String, DocHit)>> = const { RefCell::new(Vec::new()) };
-    static CHISEL: RefCell<Vec<(String, DocsHit)>> = const { RefCell::new(Vec::new()) };
+    static TRAMMEL: RefCell<Vec<(String, TrammelHit)>> = const { RefCell::new(Vec::new()) };
+    static CHISEL: RefCell<Vec<(String, ChiselHit)>> = const { RefCell::new(Vec::new()) };
     static PROBATIO: RefCell<Vec<(String, RunHit)>> = const { RefCell::new(Vec::new()) };
+    static HEAD: RefCell<Vec<(String, HeadHit)>> = const { RefCell::new(Vec::new()) };
 }
 
 struct Reset;
@@ -29,6 +32,7 @@ impl Drop for Reset {
         TRAMMEL.with(|slot| slot.borrow_mut().clear());
         CHISEL.with(|slot| slot.borrow_mut().clear());
         PROBATIO.with(|slot| slot.borrow_mut().clear());
+        HEAD.with(|slot| slot.borrow_mut().clear());
     }
 }
 
@@ -46,37 +50,33 @@ fn key(project: &Path, rel: &str) -> String {
 pub fn trammel(
     project: &Path,
     rel: &str,
-    load: impl FnOnce() -> Result<Value, ReadError>,
-) -> Result<Arc<Value>, ReadError> {
-    if !ON.with(|flag| flag.get()) {
-        return load().map(Arc::new);
-    }
-    let saved = key(project, rel);
-    let hit = TRAMMEL.with(|slot| {
-        slot.borrow()
-            .iter()
-            .find(|(name, _)| name == &saved)
-            .map(|(_, value)| value.clone())
-    });
-    if let Some(value) = hit {
-        return value;
-    }
-    let loaded = load().map(Arc::new);
-    TRAMMEL.with(|slot| slot.borrow_mut().push((saved, loaded.clone())));
-    loaded
+    load: impl FnOnce() -> Result<trammel_idx::Index, ReadError>,
+) -> Result<Arc<trammel_idx::Index>, ReadError> {
+    remember(&TRAMMEL, project, rel, load)
 }
 
 pub fn chisel(
     project: &Path,
     rel: &str,
-    load: impl FnOnce() -> Result<Vec<Value>, ReadError>,
-) -> Result<Arc<Vec<Value>>, ReadError> {
+    load: impl FnOnce() -> Result<chisel_idx::Index, ReadError>,
+) -> Result<Arc<chisel_idx::Index>, ReadError> {
+    remember(&CHISEL, project, rel, load)
+}
+
+type Slot<T> = std::thread::LocalKey<RefCell<Vec<(String, Result<Arc<T>, ReadError>)>>>;
+
+fn remember<T>(
+    slot: &'static Slot<T>,
+    project: &Path,
+    rel: &str,
+    load: impl FnOnce() -> Result<T, ReadError>,
+) -> Result<Arc<T>, ReadError> {
     if !ON.with(|flag| flag.get()) {
         return load().map(Arc::new);
     }
     let saved = key(project, rel);
-    let hit = CHISEL.with(|slot| {
-        slot.borrow()
+    let hit = slot.with(|cell| {
+        cell.borrow()
             .iter()
             .find(|(name, _)| name == &saved)
             .map(|(_, value)| value.clone())
@@ -85,7 +85,7 @@ pub fn chisel(
         return value;
     }
     let loaded = load().map(Arc::new);
-    CHISEL.with(|slot| slot.borrow_mut().push((saved, loaded.clone())));
+    slot.with(|cell| cell.borrow_mut().push((saved, loaded.clone())));
     loaded
 }
 
@@ -110,5 +110,28 @@ pub fn probatio(
     }
     let loaded = load().map(|rows| rows.map(Arc::new));
     PROBATIO.with(|slot| slot.borrow_mut().push((saved, loaded.clone())));
+    loaded
+}
+
+/// `git rev-parse HEAD` once per project per call.
+pub fn head(
+    project: &Path,
+    load: impl FnOnce() -> Result<String, String>,
+) -> Result<String, String> {
+    if !ON.with(|flag| flag.get()) {
+        return load();
+    }
+    let saved = project.display().to_string();
+    let hit = HEAD.with(|slot| {
+        slot.borrow()
+            .iter()
+            .find(|(name, _)| name == &saved)
+            .map(|(_, value)| value.clone())
+    });
+    if let Some(value) = hit {
+        return value;
+    }
+    let loaded = load();
+    HEAD.with(|slot| slot.borrow_mut().push((saved, loaded.clone())));
     loaded
 }

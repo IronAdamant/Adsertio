@@ -34,7 +34,8 @@ pub static TOOLS: &[Tool] = &[
             Param { name: "states", kind: Kind::StrList, required: false, doc: "Only claims with one of these verdicts: verified, refuted, unverified. Do not also pass verdict.", choices: &[] },
             Param { name: "compact", kind: Kind::Bool, required: false, doc: "Omit evidence detail. Each pointer still has its state.", choices: &[] },
             Param { name: "limit", kind: Kind::UInt, required: false, doc: "How many claims to return. Omit it to return every matching claim. Maximum 500 when paging.", choices: &[] },
-            Param { name: "offset", kind: Kind::UInt, required: false, doc: "Skip this many matching claims. Omit it, and limit, to return every claim.", choices: &[] },
+            Param { name: "offset", kind: Kind::UInt, required: false, doc: "Skip this many matching claims. Omit it, and limit, to return every claim. Prefer after: offset can skip a claim when a verdict changes between pages.", choices: &[] },
+            Param { name: "after", kind: Kind::Str, required: false, doc: "Stable cursor. Pass next_after from the previous page. Claims are ordered by created, then by id.", choices: &[] },
         ],
         run: view,
     },
@@ -61,7 +62,7 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         name: "adsertio_check",
         group: "core",
-        description: "Read every claim. Fail on damage, a bad file name, a bad created time, a stale attach lock, or a malformed evidence timestamp. Same as the adsertio check command.",
+        description: "Read every claim once. Fail on damage, a bad file name, a bad created time, or a malformed evidence timestamp. A lock or temp file whose writer is gone is removed. Same as the adsertio check command.",
         params: &[],
         run: check_tool,
     },
@@ -293,9 +294,11 @@ fn ls(a: &Args) -> Result<Value, String> {
 fn view(a: &Args) -> Result<Value, String> {
     let (limit, offset) = page_args(a)?;
     let filter = verdict_filter(a)?;
+    let after = crate::paging::parse_after(a.str("after"))?;
     let compact = a.bool("compact") == Some(true);
     let store = Store::open()?;
     let mut claims = claim::load_all(&store)?;
+    let scoped = a.str("id").is_some();
     if let Some(id) = a.str("id") {
         claims.retain(|c| c.id == id);
         if claims.is_empty() {
@@ -304,41 +307,25 @@ fn view(a: &Args) -> Result<Value, String> {
                 fsx::clip(id, 60)
             ));
         }
+    } else if let Some((created, id)) = &after {
+        claims.retain(|claim| claim::is_after(claim, created, id));
     }
-    let mut rows = Vec::new();
-    let (mut verified, mut refuted, mut unverified) = (0u64, 0u64, 0u64);
     let project = store.project.clone();
-    crate::cache::with_cache(|| {
-        for c in &claims {
-            let v = verdict::view(&project, c);
-            match v.verdict {
-                verdict::Verdict::Verified => verified += 1,
-                verdict::Verdict::Refuted => refuted += 1,
-                verdict::Verdict::Unverified => unverified += 1,
-            }
-            let keep = filter
-                .as_ref()
-                .is_none_or(|names| names.iter().any(|name| *name == v.verdict.name()));
-            if keep {
-                rows.push(v.to_value(c, compact));
-            }
-        }
-        Ok(finish_page(
-            "adsertio_view",
-            rows,
-            limit,
-            offset,
-            vec![(
-                "counts",
-                Value::obj(vec![
-                    ("verified", Value::uint(verified)),
-                    ("refuted", Value::uint(refuted)),
-                    ("unverified", Value::uint(unverified)),
-                ]),
-            )],
-            a,
-        ))
-    })
+    let hint = crate::paging::Hint {
+        id: a.str("id"),
+        verdict: a.str("verdict"),
+        states: a.list("states"),
+        compact,
+    };
+    let query = crate::paging::Query {
+        limit,
+        offset,
+        filter,
+        after,
+        compact,
+        scoped,
+    };
+    crate::cache::with_cache(|| Ok(crate::paging::assemble(&project, &claims, &query, &hint)))
 }
 
 const MAX_PAGE: u64 = 500;
@@ -489,6 +476,7 @@ pub fn store_check() -> Result<Value, String> {
     let mut problems = Vec::new();
     let mut strays = Vec::new();
     let dir = store.claims_dir();
+    fsx::sweep_abandoned_temps(&dir);
     if let Ok(rd) = std::fs::read_dir(&dir) {
         for entry in rd.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
@@ -499,9 +487,7 @@ pub fn store_check() -> Result<Value, String> {
             }
             if name.starts_with('.') && name.ends_with(".md.lock") {
                 if fsx::lock_file_is_stale(&path) {
-                    problems.push(format!(
-                        "stale lock .adsertio/claims/{name}; the attach that held it did not finish. Remove that lock file, then retry adsertio_attach."
-                    ));
+                    let _ = std::fs::remove_file(&path);
                 }
                 continue;
             }
@@ -528,16 +514,21 @@ pub fn store_check() -> Result<Value, String> {
                 claim.id, claim.created
             ));
         }
-        let viewed = verdict::view(&store.project, claim);
-        for evidence in &viewed.evidence {
-            if evidence.malformed {
-                problems.push(format!(
-                    "claim \"{}\" pointer {} has a malformed timestamp or commit",
-                    claim.id, evidence.pointer
-                ));
+    }
+    let project = store.project.clone();
+    crate::cache::with_cache(|| {
+        for claim in &claims {
+            for pointer in &claim.evidence {
+                let evidence = verdict::read_evidence(&project, pointer);
+                if evidence.malformed {
+                    problems.push(format!(
+                        "claim \"{}\" pointer {} has a malformed timestamp or commit",
+                        claim.id, evidence.pointer
+                    ));
+                }
             }
         }
-    }
+    });
     if !problems.is_empty() {
         return Err(problems.join("\n"));
     }
@@ -581,7 +572,7 @@ fn guide(_a: &Args) -> Result<Value, String> {
         (
             "paging",
             Value::str(
-                "Omit limit and offset and adsertio_ls and adsertio_view return every matching claim. Pass limit (1 to 500) and offset to page. count and counts cover the whole store. When truncated is true, hint gives the next call, including verdict, states, compact, and id when they were set, and next_offset is the offset to pass.",
+                "Omit limit and adsertio_ls and adsertio_view return every matching claim. Pass limit (1 to 500) to page. For adsertio_view, pass after as the next_after cursor so a verdict that changes behind the cursor does not skip a claim. offset still skips a count of matches and can skip one when a verdict changes. counts on a page covers the claims that page judged; counts_complete is true when that is the whole scope. count on adsertio_ls is still the whole store.",
             ),
         ),
         (
