@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.4.0
+
+Same claim format as 1.3.1. This release cuts the rerun an agent made after
+every commit: it tests uncommitted work, records claims, commits, and every
+Chisel pass went stale because HEAD moved.
+
+- A Chisel pass whose commit is not HEAD is fresh when the `tree` Chisel
+  recorded (Chisel 0.25.0 and later: the git tree of the working tree the
+  tests ran against, uncommitted and untracked files included) equals
+  `HEAD^{tree}`, or differs from it only under `.adsertio/`, `.chisel/`,
+  `.trammel/` or `.probatio/`. Committing exactly the tested work, with or
+  without the claims and the Chisel store, keeps the pass. Any other change
+  committed after the run is `stale`, and the detail names both trees.
+  Without `tree` (older Chisel, Trammel) the commit rule is unchanged.
+- HEAD and its tree come from one `git rev-parse HEAD HEAD^{tree}` per view,
+  so the common case runs no extra git. `git diff-tree` runs once per
+  recorded tree that is not HEAD's tree, cached for the view. A tree id goes
+  to git only after it is checked to be 40 or 64 hex digits.
+- The stale detail's fix for a Chisel pass with no recorded tree adds that
+  Chisel 0.25.0 or later records the tested tree, so committing exactly that
+  work needs no rerun. `adsertio_guide`'s `stale_after_commit` says the same.
+- `tests/v140.rs` uses real Chisel output (`tests/fixtures/chisel/real-tree`):
+  a dirty `chisel run -- cargo test` on a crate with a new test, committed
+  exactly, committed with claims and store, and changed after the run.
+
 ## 1.3.1
 
 - `adsertio view --if-store` (CLI only) prints nothing and exits 0 when no

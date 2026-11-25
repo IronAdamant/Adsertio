@@ -178,6 +178,23 @@ SQLite reader. The live stores are JSON.
   an agent tests uncommitted work and then commits. A prefix of at least 7 hex digits matches. If git is
   missing, or the folder is not a repository, the pointer is `stale` rather
   than verified.
+- A Chisel pass may also carry `tree` (in `test_passes`, or on the
+  `test_results` row when that row has the `commit`): the git tree id of the
+  working tree the tests ran against, written by Chisel 0.25.0 and later. When
+  the commit is not HEAD but `tree` equals `git rev-parse HEAD^{tree}`, the
+  pass is fresh: the tested code is exactly the committed code. It is also
+  fresh when `git diff-tree -r` between the two trees lists only paths under
+  `.adsertio/`, `.chisel/`, `.trammel/` or `.probatio/` (claims and evidence
+  written around the run and committed with it). The detail then says the
+  pass was tested before the commit on that tree. Any other difference is
+  `stale`, and the detail names both trees. A tree that cannot be compared
+  (git does not have it) is `stale`. `tree` must be 40 or 64 hex digits; any
+  other value, or no `tree`, leaves the commit rule above as it is, and the
+  stale detail's fix adds that Chisel 0.25.0 or later records the tree.
+  HEAD and its tree come from one `git rev-parse HEAD HEAD^{tree}` per
+  project per view; `git diff-tree` runs at most once per recorded tree per
+  view, and only when that tree is not HEAD's. Trammel records no tree, so
+  a Trammel pass keeps the commit rule.
 - No timestamp and no commit can still pass. The detail says `no timestamp`.
 - A `fail` stays a `fail`.
 
@@ -193,7 +210,7 @@ Per pointer, `read_evidence` returns a state:
 | `unreadable` | Outside the project, the wrong kind of file, over the size limit (below), not UTF-8, a symlink route out, SQLite, bad JSON, bad magic, or a selector the adapter rejects. |
 | `no_adapter` | Recognised, and not interpreted. Worktree overlays. Not proof. |
 | `inconclusive` | Read, and neither a pass nor a fail. A mutation timeout, a run with no kill and no survivor, an unchecked ledger. |
-| `stale` | Was a pass, and is older than the claim or tied to a commit that is not HEAD. |
+| `stale` | Was a pass, and is older than the claim or tied to a commit that is not HEAD (unless Chisel's recorded tree shows it tested the committed code). |
 
 Per claim, `combine`:
 

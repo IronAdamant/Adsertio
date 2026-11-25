@@ -821,9 +821,14 @@ fn a_pass_on_an_older_commit_says_to_rerun_at_head() {
         assert!(detail.contains("is not HEAD"), "{detail}");
         if claim.get("id").and_then(Value::as_str) == Some("c") {
             assert!(
-                detail.ends_with(
-                    "rerun the tests at HEAD (for example chisel run -- <test command>)"
+                detail.contains(
+                    "; fix: rerun the tests at HEAD (for example chisel run -- <test command>)"
                 ),
+                "{detail}"
+            );
+            // 1.4.0: no tree was recorded, so the hint says a newer Chisel avoids the rerun.
+            assert!(
+                detail.ends_with("Chisel 0.25.0 or later records the tested tree, so a pass on uncommitted work stays fresh when exactly that work is committed, with no rerun"),
                 "{detail}"
             );
         } else {

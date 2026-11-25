@@ -42,8 +42,8 @@ cargo build --release --locked
 - `src/trammel.rs`, `src/chisel.rs`, `src/probatio.rs` the adapters.
 - `src/trammel_idx.rs`, `src/chisel_idx.rs` one index per snapshot per call.
 - `src/paging.rs` view pages and the `after` cursor.
-- `src/cache.rs` reuses one indexed snapshot, and one `git rev-parse HEAD`, for every claim in a single view or check.
-- `src/fresh.rs` timestamp and commit checks. `src/verdict.rs` states and `combine`.
+- `src/cache.rs` reuses one indexed snapshot, one `git rev-parse HEAD HEAD^{tree}`, and one `git diff-tree` per recorded tree, for every claim in a single view or check.
+- `src/fresh.rs` timestamp, commit and tested-tree checks. `src/verdict.rs` states and `combine`.
 - `src/tool.rs` tool table types and argument validation. `src/tools.rs` the tools.
 - `src/mcp.rs` the server. `src/groups.rs` the `agent-tools` block.
 - `src/claim.rs` claims and pointers. `src/store.rs` store lookup. `src/cli.rs`
@@ -56,7 +56,7 @@ cargo build --release --locked
   `tests/chisel.rs`, `tests/probatio.rs`, `tests/fresh.rs`, `tests/attach_ls.rs`,
   `tests/load.rs`, `tests/fixes.rs`, `tests/perf.rs`, `tests/ux.rs`,
   `tests/review3.rs`, `tests/review4.rs`, `tests/review5.rs`,
-  `tests/v130.rs`, `tests/tool_budget.rs`, `tests/zero_deps.rs`:
+  `tests/v130.rs`, `tests/v140.rs`, `tests/tool_budget.rs`, `tests/zero_deps.rs`:
   the failure modes the design avoids. Keep them passing. `tests/common/mod.rs`
   holds shared helpers. Fixtures in `tests/fixtures/probatio/real` and
   `tests/fixtures/chisel/real-*` were written by the real tools; prefer that

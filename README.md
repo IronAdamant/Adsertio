@@ -144,9 +144,11 @@ A pass recorded **before** the claim was written does not verify it, and neither
 
 One exception: Probatio records no time or commit, so a Probatio pass is never stale. An old run can still verify a new claim, and the detail says `no timestamp`.
 
-The only outside program Adsertio runs is `git rev-parse HEAD`, for the commit check.
+Testing uncommitted work and then committing it is the usual order, and it moves `HEAD`. Chisel 0.25.0 and later also record `tree`, the git tree of the working tree the tests ran against (uncommitted and untracked files included). A Chisel pass whose commit is not `HEAD` still counts when that tree is `HEAD`'s tree, or differs from it only under `.adsertio`, `.chisel`, `.trammel` or `.probatio` (claims and evidence, not code): the code that was tested is exactly the committed code, and the detail says so. Any other change committed after the run makes it `stale`. An older Chisel records no tree, and Trammel records none, so for those the commit must be `HEAD`.
 
-When a Chisel or Trammel pass is stale only because its commit is not `HEAD` (the usual case after testing uncommitted work and then committing), the detail ends with the fix: rerun the tests at `HEAD`, for example `chisel run -- <test command>`.
+The only outside program Adsertio runs is git: `git rev-parse HEAD HEAD^{tree}` once per view, and `git diff-tree` once per recorded tree that is not `HEAD`'s tree.
+
+When a Chisel or Trammel pass is stale because its commit is not `HEAD`, the detail ends with the fix: rerun the tests at `HEAD`, for example `chisel run -- <test command>`. When Chisel recorded no tree, it adds that Chisel 0.25.0 or later records one, so committing exactly the tested work needs no rerun.
 
 ### Pointer states
 
@@ -155,7 +157,7 @@ When a Chisel or Trammel pass is stale only because its commit is not `HEAD` (th
 | `pass` | The evidence says the claim holds. |
 | `fail` | The evidence says it does not. |
 | `missing` | The file or record is not there yet, or a step has not been verified. |
-| `stale` | It passed, but before the claim, or on a different commit. |
+| `stale` | It passed, but before the claim, or on a different commit (and, for Chisel, on code that is not the committed code). |
 | `inconclusive` | Read fine, but neither a pass nor a fail (for example, a mutation run with no catch and no survivor). |
 | `unreadable` | Adsertio could not safely read or understand it. |
 | `no_adapter` | Recognised, but deliberately not read (Chisel worktree overlays, and a pointer at one Chisel shard). |

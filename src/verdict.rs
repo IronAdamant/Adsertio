@@ -57,6 +57,10 @@ pub struct Evidence {
     pub at: Option<f64>,
     /// Commits the evidence names. Empty when it names none.
     pub commits: Vec<String>,
+    /// Beside each of `commits`, the git tree the pass ran against when the
+    /// tool recorded one (Chisel's `tree`). A pass whose tree is HEAD's tree
+    /// tested exactly the committed code.
+    pub trees: Vec<Option<String>>,
     /// The evidence named a timestamp or commit that is not a usable value.
     pub malformed: bool,
 }
@@ -97,6 +101,7 @@ pub fn read_evidence(project: &Path, pointer: &str) -> Evidence {
         detail,
         at: None,
         commits: Vec::new(),
+        trees: Vec::new(),
         malformed: false,
     };
     if let Err(e) = claim::valid_pointer(pointer) {

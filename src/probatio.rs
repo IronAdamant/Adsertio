@@ -88,6 +88,7 @@ fn evidence(pointer: &str, state: State, detail: impl Into<String>) -> Evidence 
         detail: detail.into(),
         at: None,
         commits: Vec::new(),
+        trees: Vec::new(),
         malformed: false,
     }
 }

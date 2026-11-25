@@ -74,6 +74,7 @@ pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
             if found.state == State::Pass {
                 found.at = stamp.at;
                 found.commits = stamp.commits;
+                found.trees = stamp.trees;
                 found.malformed = stamp.malformed;
                 if stamp.no_commit {
                     found.detail.push_str(
@@ -94,6 +95,7 @@ fn evidence(pointer: &str, state: State, detail: impl Into<String>) -> Evidence 
         detail: detail.into(),
         at: None,
         commits: Vec::new(),
+        trees: Vec::new(),
         malformed: false,
     }
 }
@@ -446,6 +448,7 @@ fn merge_stamp(into: &mut crate::chisel_idx::Stamp, step: &crate::chisel_idx::St
         (None, right) => right,
     };
     into.commits.extend(step.commits.iter().cloned());
+    into.trees.extend(step.trees.iter().cloned());
     into.malformed |= step.malformed;
     into.no_commit |= step.no_commit;
 }

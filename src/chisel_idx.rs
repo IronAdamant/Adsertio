@@ -2,7 +2,7 @@
 //!
 //! `test:<id>` is a map lookup. `file:<path>` reads the edges that touch that
 //! path, not every edge. The scan keeps `test_id`, `passed`, `recorded_at`,
-//! `commit`, and `code_id`.
+//! `commit`, `tree`, and `code_id`.
 
 use crate::json::{JsonError, Kind, Number, Parser, Value};
 use crate::read::{self, ReadError};
@@ -11,6 +11,9 @@ use std::collections::HashMap;
 pub struct Stamp {
     pub at: Option<f64>,
     pub commits: Vec<String>,
+    /// Beside each commit, the git tree id of the working tree the pass ran
+    /// against, when Chisel recorded one (`tree`, Chisel 0.25.0 and later).
+    pub trees: Vec<Option<String>>,
     pub malformed: bool,
     /// `test_passes` has an empty `commit`: Chisel could not read HEAD when
     /// it noted the pass. No commit was recorded, so none is checked.
@@ -22,6 +25,7 @@ impl Stamp {
         Stamp {
             at: None,
             commits: Vec::new(),
+            trees: Vec::new(),
             malformed: false,
             no_commit: false,
         }
@@ -47,11 +51,13 @@ struct TestRec {
     commit_seen: bool,
     commit: Option<String>,
     commit_bad: bool,
+    tree: Option<String>,
 }
 
 struct PassCommit {
     commit: Option<String>,
     bad: bool,
+    tree: Option<String>,
     /// The commit is the empty string, which Chisel writes when HEAD cannot
     /// be read (`git::head_commit_fast(..).unwrap_or_default()`).
     empty: bool,
@@ -229,49 +235,38 @@ impl Index {
     }
 
     fn stamp(&self, id: &str, rec: &TestRec) -> Stamp {
+        let bare = |at: Option<f64>, malformed: bool| Stamp {
+            at,
+            commits: Vec::new(),
+            trees: Vec::new(),
+            malformed,
+            no_commit: false,
+        };
         if rec.at_bad {
-            return Stamp {
-                at: None,
-                commits: Vec::new(),
-                malformed: true,
-                no_commit: false,
-            };
+            return bare(None, true);
         }
         if rec.commit_bad {
-            return Stamp {
-                at: rec.at,
-                commits: Vec::new(),
-                malformed: true,
-                no_commit: false,
-            };
+            return bare(rec.at, true);
         }
         if rec.commit_seen {
             return Stamp {
                 at: rec.at,
                 commits: rec.commit.iter().cloned().collect(),
+                trees: rec.commit.iter().map(|_| rec.tree.clone()).collect(),
                 malformed: false,
                 no_commit: false,
             };
         }
         match self.passes.get(&normalize_test_id(id)) {
-            Some(pass) if pass.bad => Stamp {
-                at: rec.at,
-                commits: Vec::new(),
-                malformed: true,
-                no_commit: false,
-            },
+            Some(pass) if pass.bad => bare(rec.at, true),
             Some(pass) => Stamp {
                 at: rec.at,
                 commits: pass.commit.iter().cloned().collect(),
+                trees: pass.commit.iter().map(|_| pass.tree.clone()).collect(),
                 malformed: false,
                 no_commit: pass.empty,
             },
-            None => Stamp {
-                at: rec.at,
-                commits: Vec::new(),
-                malformed: false,
-                no_commit: false,
-            },
+            None => bare(rec.at, false),
         }
     }
 }
@@ -389,9 +384,11 @@ fn parse_result(
     let mut commit_seen = false;
     let mut commit: Option<String> = None;
     let mut commit_bad = false;
+    let mut tree: Option<String> = None;
     parser.with_object(depth, |parser, key, depth| {
         match key {
             "test_id" => id = take_string(parser, depth)?,
+            "tree" => tree = take_string(parser, depth)?.and_then(|text| tree_id(&text)),
             "passed" => {
                 if matches!(parser.kind()?, Kind::Bool) {
                     passed = Some(Some(parser.take_bool()?));
@@ -435,6 +432,7 @@ fn parse_result(
             commit_seen,
             commit,
             commit_bad,
+            tree,
         },
     ))
 }
@@ -596,6 +594,7 @@ fn take_passes(
             PassCommit {
                 commit: None,
                 bad: false,
+                tree: None,
                 empty: false,
             }
         };
@@ -607,8 +606,11 @@ fn take_passes(
 fn parse_pass(parser: &mut Parser<'_>, depth: usize) -> Result<PassCommit, JsonError> {
     let mut commit: Option<Option<String>> = None;
     let mut bad = false;
+    let mut tree: Option<String> = None;
     parser.with_object(depth, |parser, key, depth| {
-        if key == "commit" {
+        if key == "tree" {
+            tree = take_string(parser, depth)?.and_then(|text| tree_id(&text));
+        } else if key == "commit" {
             if matches!(parser.kind()?, Kind::String) {
                 commit = Some(Some(parser.take_string()?));
             } else {
@@ -624,6 +626,7 @@ fn parse_pass(parser: &mut Parser<'_>, depth: usize) -> Result<PassCommit, JsonE
         return Ok(PassCommit {
             commit: None,
             bad: true,
+            tree: None,
             empty: false,
         });
     }
@@ -635,7 +638,21 @@ fn parse_pass(parser: &mut Parser<'_>, depth: usize) -> Result<PassCommit, JsonE
             (commit, bad, false)
         }
     };
-    Ok(PassCommit { commit, bad, empty })
+    Ok(PassCommit {
+        commit,
+        bad,
+        tree,
+        empty,
+    })
+}
+
+/// A full git tree id (40 or 64 hex digits), lower case. Anything else is no
+/// tree: today's commit rule then applies, so a bad `tree` never makes a pass
+/// fresh.
+fn tree_id(text: &str) -> Option<String> {
+    let text = text.trim();
+    ((text.len() == 40 || text.len() == 64) && text.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| text.to_ascii_lowercase())
 }
 
 fn skip_blame(parser: &mut Parser<'_>, depth: usize, rel: &str) -> Result<(), Fail> {

@@ -898,7 +898,7 @@ fn guide(_a: &Args) -> Result<Value, String> {
         (
             "stale_after_commit",
             Value::str(
-                "A Chisel or Trammel pass recorded before a commit is stale once HEAD moves. Rerun the tests at HEAD (for example chisel run -- <test command>) after committing, then view again.",
+                "A Chisel or Trammel pass recorded before a commit is stale once HEAD moves, unless Chisel recorded the tested tree (Chisel 0.25.0 and later) and it is HEAD's tree: testing uncommitted work, then committing exactly that work, keeps the pass fresh. Otherwise rerun the tests at HEAD (for example chisel run -- <test command>), then view again.",
             ),
         ),
         (
