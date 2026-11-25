@@ -24,7 +24,8 @@ does not understand is `unreadable` or `no_adapter`, never `pass`.
   error for `check`. `view` and `ls` leave it out and warn on stderr. This
   includes dotfiles. The only exceptions are Adsertio's own files while a
   write or attach is in flight: `.<name>.tmp-<pid>-<n>`, `.<id>.md.lock`, and
-  `.<id>.md.lock.break`.
+  `.<id>.md.lock.break`, and macOS Finder's `.DS_Store`, which every command
+  ignores.
 
 ## 2. Claims
 

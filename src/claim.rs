@@ -292,8 +292,8 @@ pub fn load_all(store: &Store) -> Result<Vec<Claim>, String> {
     for e in rd {
         let e = e.map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
         let name = e.file_name().to_string_lossy().to_string();
-        if fsx::is_work_file(&name) {
-            continue; // a write or an attach in flight
+        if fsx::is_work_file(&name) || fsx::is_os_file(&name) {
+            continue; // a write or an attach in flight, or a Finder file
         }
         if name.starts_with('.') {
             eprintln!(

@@ -206,6 +206,12 @@ fn temp_abandoned(path: &Path, name: &str) -> bool {
 /// file (`.<name>.tmp-<pid>-<n>`), an attach lock (`.<id>.md.lock`), or the
 /// guard taken to break a dead lock (`.<id>.md.lock.break`). Any other name
 /// that is not `<id>.md`, dotfiles included, is not a claim file.
+/// Files the operating system drops into any folder (macOS Finder's
+/// `.DS_Store`). They are not claims and not strays: every command ignores them.
+pub fn is_os_file(name: &str) -> bool {
+    name == ".DS_Store"
+}
+
 pub fn is_work_file(name: &str) -> bool {
     name.starts_with('.')
         && (name.contains(".tmp-")

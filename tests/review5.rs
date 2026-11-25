@@ -435,6 +435,11 @@ fn check_reports_a_dotfile_in_the_claims_folder() {
     assert!(out.status.success(), "{}", text(&out));
     assert!(text(&out).contains(".notes.md"), "{}", text(&out));
     fs::remove_file(dir.join(".adsertio/claims/.notes.md")).unwrap();
+    // Finder's .DS_Store is not a stray either.
+    fs::write(dir.join(".adsertio/claims/.DS_Store"), "x").unwrap();
+    assert!(cli(&dir, &["check"]).status.success());
+    let out = cli(&dir, &["view"]);
+    assert!(!text(&out).contains(".DS_Store"), "{}", text(&out));
     // Adsertio's own lock guard is not a stray.
     fs::write(dir.join(".adsertio/claims/.real.md.lock.break"), "").unwrap();
     let out = cli(&dir, &["check"]);

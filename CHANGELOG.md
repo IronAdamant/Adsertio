@@ -44,7 +44,8 @@ Several pointers that 1.2.1 called pass are now inconclusive, on purpose.
 - A symlinked `claims/<x>.md` made `view` and `ls` fail. It is left out with
   a warning, as SPEC says, and `check` reports it. `check` now also reports a
   dotfile in the claims folder that is not one of Adsertio's own temp, lock,
-  or guard files, and `view` and `ls` warn about it.
+  or guard files, and `view` and `ls` warn about it. macOS Finder's
+  `.DS_Store` is ignored.
 - Chisel writes `test_passes[id].commit = ""` when it cannot read HEAD. That
   was treated as malformed (stale, and `check` exited 1). It is now no
   commit recorded: no commit is checked, the timestamp rule still applies,

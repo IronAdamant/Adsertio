@@ -489,7 +489,7 @@ pub fn store_check() -> Result<Value, String> {
                 fsx::break_abandoned_lock(&path);
                 continue;
             }
-            if fsx::is_work_file(&name) {
+            if fsx::is_work_file(&name) || fsx::is_os_file(&name) {
                 continue;
             }
             let slug = name.strip_suffix(".md");
