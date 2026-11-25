@@ -197,10 +197,12 @@ file fails the whole view and the whole list. It is not left out.
   `limit` is 1 to 500 when it is set.
 - `adsertio_attach` locks that one claim for the read and the write. The lock
   file starts with the holder pid. A pid that is not running is removed at
-  once. Text that is not a pid is removed once the file is a second old, or at
-  once when the mtime is in the future. A live pid is kept: the call waits 5
-  seconds and then fails, and the file is unchanged. A future mtime does not
-  keep a dead lock.
+  once. Text that is not a pid is removed once the file is a second old. A
+  mtime more than a couple of seconds in the future, with no live pid, is
+  removed at once. A couple of seconds ahead is treated as clock skew while
+  the pid line is written. A live pid is kept: the call waits 5 seconds and
+  then fails, and the file is unchanged. A future mtime does not keep a dead
+  lock.
 - A pointer path with a backslash, a drive letter, a leading slash, or `..` is
   an error at `adsertio_claim` and `adsertio_attach`. Use a relative path with
   forward slashes inside the project.

@@ -26,6 +26,9 @@ const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 const LOCK_OWN_PID: u64 = 30;
 const LOCK_GRACE: u64 = 1;
 const TEMP_ABANDON: u64 = 30;
+/// A file time a couple of seconds ahead is clock skew, not a lock planted
+/// in the future. Farther than this, and no live pid, the lock is not held.
+const CLOCK_SKEW: std::time::Duration = std::time::Duration::from_secs(2);
 
 struct HeldLock {
     path: PathBuf,
@@ -99,17 +102,30 @@ pub fn lock_held(lock: &Path) -> bool {
     let text = fs::read_to_string(lock).unwrap_or_default();
     match crate::proc::leading_pid(&text) {
         Some(pid) if crate::proc::pid_alive(pid) => {
-            if pid == std::process::id() {
-                // This process is not inside the lock yet. A file that names
-                // us and is half a minute old is a pid that was reused.
-                !matches!(age, Age::Secs(secs) if secs >= LOCK_OWN_PID)
-                    && !matches!(age, Age::Future)
-            } else {
-                true
-            }
+            pid != std::process::id() || !own_pid_is_leftover(&age)
         }
         Some(_) => false,
-        None => matches!(age, Age::Secs(secs) if secs < LOCK_GRACE),
+        // No pid yet: the holder may still be writing the line. A mtime a
+        // moment ahead is the same window. An hour ahead is not.
+        None => within_grace(&age),
+    }
+}
+
+fn within_grace(age: &Age) -> bool {
+    match age {
+        Age::Secs(secs) => *secs < LOCK_GRACE,
+        Age::Future(ahead) => *ahead < CLOCK_SKEW,
+        Age::Missing => false,
+    }
+}
+
+/// This process is not inside the lock. A file that names us and is old, or
+/// far in the future, is a reused pid or a planted time.
+fn own_pid_is_leftover(age: &Age) -> bool {
+    match age {
+        Age::Secs(secs) => *secs >= LOCK_OWN_PID,
+        Age::Future(ahead) => *ahead >= CLOCK_SKEW,
+        Age::Missing => true,
     }
 }
 
@@ -142,7 +158,7 @@ fn temp_abandoned(path: &Path, name: &str) -> bool {
         return !crate::proc::pid_alive(pid);
     }
     match file_age(path) {
-        Age::Future => true,
+        Age::Future(ahead) if ahead >= CLOCK_SKEW => true,
         Age::Secs(secs) if secs >= TEMP_ABANDON => true,
         _ => false,
     }
@@ -168,7 +184,8 @@ fn temp_pid(name: &str) -> Option<u32> {
 
 enum Age {
     Missing,
-    Future,
+    /// How far the mtime is ahead of now.
+    Future(std::time::Duration),
     Secs(u64),
 }
 
@@ -179,10 +196,40 @@ fn file_age(path: &Path) -> Age {
     match meta.modified() {
         Ok(when) => match when.elapsed() {
             Ok(age) => Age::Secs(age.as_secs()),
-            Err(_) => Age::Future,
+            Err(error) => Age::Future(error.duration()),
         },
-        Err(_) => Age::Future,
+        Err(_) => Age::Future(CLOCK_SKEW),
     }
+}
+
+/// Replace `dest` with `tmp`. On Windows a just-closed file can refuse the
+/// replace for a moment (`Access is denied` or a sharing violation). Retry
+/// that, and leave any other error as a failure.
+fn replace_file(tmp: &Path, dest: &Path) -> Result<(), String> {
+    let mut last = None;
+    for attempt in 0..8 {
+        match fs::rename(tmp, dest) {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt < 7 && replace_busy(&error) => {
+                last = Some(error);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(error) => {
+                return Err(format!("cannot replace {}: {error}", dest.display()));
+            }
+        }
+    }
+    Err(format!(
+        "cannot replace {}: {}",
+        dest.display(),
+        last.map(|error| error.to_string())
+            .unwrap_or_else(|| "the file stayed busy".into())
+    ))
+}
+
+fn replace_busy(error: &std::io::Error) -> bool {
+    // Windows: ERROR_ACCESS_DENIED is 5, ERROR_SHARING_VIOLATION is 32.
+    cfg!(windows) && matches!(error.raw_os_error(), Some(5 | 32))
 }
 
 /// Why `meta` is not something a pointer can read.
@@ -238,7 +285,7 @@ pub fn write_atomic(dest: &Path, bytes: &[u8], overwrite: bool) -> Result<(), St
             .map_err(|e| format!("cannot sync {}: {e}", tmp.display()))?;
     }
     if overwrite {
-        fs::rename(&tmp, dest).map_err(|e| format!("cannot replace {}: {e}", dest.display()))?;
+        replace_file(&tmp, dest)?;
         guard.armed = false;
     } else {
         match fs::hard_link(&tmp, dest) {
