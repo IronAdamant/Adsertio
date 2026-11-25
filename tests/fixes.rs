@@ -369,3 +369,26 @@ fn view_can_filter_states_and_drop_detail() {
     assert!(compact[0].contains(r#"\"state\""#), "{}", compact[0]);
     assert!(!compact[0].contains(r#"\"detail\""#), "{}", compact[0]);
 }
+
+#[test]
+fn the_two_binaries_do_not_share_main_rs() {
+    let toml = include_str!("../Cargo.toml");
+    assert_eq!(toml.matches("path = \"src/main.rs\"").count(), 1);
+    assert!(toml.contains("path = \"src/bin/adsertio-mcp.rs\""));
+}
+
+#[test]
+fn the_ledger_row_is_not_reported_as_a_speedup() {
+    let doc = include_str!("../docs/perf/1.1.0.md");
+    assert!(doc.contains("No ledger code changed"));
+    assert!(!doc.contains("| Ledger, 10,000 entries |"));
+}
+
+#[test]
+fn future_archives_use_the_target_triple_and_forward_slashes() {
+    let workflow = include_str!("../.github/workflows/release.yml");
+    assert!(workflow.contains("adsertio-${version}-${TARGET}"));
+    assert!(!workflow.contains("Compress-Archive"));
+    let script = include_str!("../.github/scripts/zip-forward.ps1");
+    assert!(script.contains("-replace '\\\\', '/'"));
+}
