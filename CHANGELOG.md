@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.1
+
+The third review. Correctness only. A re-measure is in `docs/perf/1.1.1.md`; it is not a speedup.
+
+- A truncated `adsertio_ls` or `adsertio_view` hint repeats `id`, `verdict`, `states`, and `compact` along with `limit` and `offset`.
+- `.adsertio/claims` as a symlink is refused. Claim files that are not `slug.md` are left out of `ls` and `view`, with a warning, and `check` names them.
+- `check` rejects a `created` time that is not `YYYY-MM-DDTHH:MM:SSZ`. A pass whose `at` or `recorded_at` is not a number, or whose `commit` is empty, is `stale` and `check` names it.
+- A named pipe is described as a pipe. A claim holds at most 50 pointers, a body of 20000 bytes, and a file of 262144 bytes. `attach` will not cross the pointer cap. Duplicate tags and evidence on a new claim are stored once.
+- Claims that share a summary and omit `id` retry until each one is stored. `check` names a stale attach lock and says to remove it, then retry `adsertio_attach`.
+- `limit` errors say the range is 1 to 500. A request whose `jsonrpc` is missing or not `2.0` is an error. `adsertio_claim` on a folder with no claims store says to run `init`. `adsertio_check` is the MCP form of `adsertio check`.
+- Windows release zips are checked for a PK header, forward-slash names, and exactly `adsertio.exe` and `adsertio-mcp.exe` in the versioned folder.
+
 ## 1.1.0
 
 Faster repeated evidence reads, and a smaller answer for an agent.

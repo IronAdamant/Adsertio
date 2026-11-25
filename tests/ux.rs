@@ -76,7 +76,7 @@ fn lists_are_paged_and_counts_stay_complete() {
 
     let bad = talk(&dir, call("adsertio_ls", r#"{"limit":0}"#, 1).as_bytes());
     assert!(
-        is_error(&bad[0]) && bad[0].contains("at least 1"),
+        is_error(&bad[0]) && bad[0].contains("from 1 to 500"),
         "{}",
         bad[0]
     );

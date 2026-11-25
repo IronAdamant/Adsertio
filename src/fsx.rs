@@ -82,6 +82,32 @@ pub fn with_claim_lock<T>(
     }
 }
 
+pub fn lock_file_is_stale(lock: &Path) -> bool {
+    lock_is_stale(lock)
+}
+
+/// Why `meta` is not something a pointer can read.
+pub fn not_a_file(meta: &fs::Metadata) -> &'static str {
+    if meta.is_dir() {
+        "is a folder; point at a file"
+    } else if is_fifo(meta) {
+        "is a pipe, not a file"
+    } else {
+        "is not a file"
+    }
+}
+
+#[cfg(unix)]
+fn is_fifo(meta: &fs::Metadata) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    meta.file_type().is_fifo()
+}
+
+#[cfg(not(unix))]
+fn is_fifo(_meta: &fs::Metadata) -> bool {
+    false
+}
+
 fn lock_is_stale(lock: &Path) -> bool {
     let Ok(meta) = fs::metadata(lock) else {
         return true;

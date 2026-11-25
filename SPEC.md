@@ -161,7 +161,12 @@ file fails the whole view and the whole list. It is not left out.
   returns `{id, evidence, added}`. `evidence` is still the new count. `added`
   is the pointers this call wrote, in order. A bad pointer, an empty list, or a
   duplicate (in the request, or already on the claim) is an error and writes
-  nothing. Only that claim file is replaced.
+  nothing. Only that claim file is replaced. A claim holds at most 50 pointers.
+  Attach will not go past that.
+- `adsertio_check` `{}` is the same read as `adsertio check`. It fails on a
+  damaged claim, a file in `claims` that is not `slug.md`, a `created` time
+  that is not `YYYY-MM-DDTHH:MM:SSZ`, a stale attach lock, or a pass whose
+  timestamp or commit is malformed.
 - `adsertio_view` `{id?, verdict?, states?, compact?, limit?, offset?}` returns
   `{claims, counts, truncated, next_offset, hint?}`. Each claim has `id`,
   `summary`, `verdict`, and `evidence` (`pointer`, `state`, and `detail` unless
@@ -174,7 +179,8 @@ file fails the whole view and the whole list. It is not left out.
 - With no `limit` and no `offset`, `adsertio_view` and `adsertio_ls` return every
   matching claim. `limit` is then 1 to 500 and `offset` skips that many.
   `truncated` is true when another page exists. `next_offset` is the offset to
-  pass next (or null), and `hint` names the next call. A list of more than 100
+  pass next (or null), and `hint` names the next call, repeating `id`,
+  `verdict`, `states`, and `compact` when they were set. A list of more than 100
   claims, with no limit, also includes `hint`. `counts` is not reduced by the page.
 - `adsertio_attach` locks that one claim for the read and the write. A lock
   older than 30 seconds is stale and is removed. If the lock is still held, the

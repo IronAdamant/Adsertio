@@ -60,13 +60,14 @@ pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
         Ok(sel) => sel,
         Err(text) => return evidence(pointer, State::Unreadable, text),
     };
-    let (at, commits) = freshness(&docs, &sel);
+    let (at, commits, malformed) = freshness(&docs, &sel);
     match judge(&docs, sel) {
         Ok((state, detail)) => {
             let mut found = evidence(pointer, state, detail);
             if found.state == State::Pass {
                 found.at = at;
                 found.commits = commits;
+                found.malformed = malformed;
             }
             found
         }
@@ -81,6 +82,7 @@ fn evidence(pointer: &str, state: State, detail: impl Into<String>) -> Evidence 
         detail: detail.into(),
         at: None,
         commits: Vec::new(),
+        malformed: false,
     }
 }
 
@@ -320,26 +322,23 @@ fn file_state(docs: &[Value], file: &str) -> Result<(State, String), String> {
     }
 }
 
-fn freshness(docs: &[Value], sel: &Sel) -> (Option<f64>, Vec<String>) {
+fn freshness(docs: &[Value], sel: &Sel) -> (Option<f64>, Vec<String>, bool) {
     match sel {
         Sel::Test(id) => {
             let Ok(rows) = table(docs, "test_results") else {
-                return (None, Vec::new());
+                return (None, Vec::new(), false);
             };
             let Some(row) = latest(&rows, id) else {
-                return (None, Vec::new());
+                return (None, Vec::new(), false);
             };
-            (
-                row.get("recorded_at").and_then(Value::as_f64),
-                commits_for(docs, id, row),
-            )
+            stamp_row(docs, id, row)
         }
         Sel::File(path) => {
             let Ok(edges) = table(docs, "test_edges") else {
-                return (None, Vec::new());
+                return (None, Vec::new(), false);
             };
             let Ok(rows) = table(docs, "test_results") else {
-                return (None, Vec::new());
+                return (None, Vec::new(), false);
             };
             let mut ids = Vec::new();
             for edge in edges {
@@ -358,21 +357,44 @@ fn freshness(docs: &[Value], sel: &Sel) -> (Option<f64>, Vec<String>) {
             }
             let mut at = None;
             let mut commits = Vec::new();
+            let mut malformed = false;
             for id in ids {
                 if let Some(row) = latest(&rows, &id) {
-                    at = older(at, row.get("recorded_at").and_then(Value::as_f64));
-                    commits.extend(commits_for(docs, &id, row));
+                    let (row_at, row_commits, bad) = stamp_row(docs, &id, row);
+                    at = older(at, row_at);
+                    commits.extend(row_commits);
+                    malformed |= bad;
                 }
             }
-            (at, commits)
+            (at, commits, malformed)
         }
     }
 }
 
-fn commits_for(docs: &[Value], id: &str, row: &Value) -> Vec<String> {
-    if let Some(text) = commit_text(row.get("commit")) {
-        return vec![text];
+fn stamp_row(docs: &[Value], id: &str, row: &Value) -> (Option<f64>, Vec<String>, bool) {
+    let (at, bad_time) = crate::fresh::read_time(row.get("recorded_at"));
+    if bad_time {
+        return (None, Vec::new(), true);
     }
+    let (direct, bad_commit) = crate::fresh::read_commit(row.get("commit"));
+    if bad_commit {
+        return (at, Vec::new(), true);
+    }
+    let commit = match direct {
+        Some(text) => Some(text),
+        None => match commit_from_passes(docs, id) {
+            Ok(text) => text,
+            Err(true) => return (at, Vec::new(), true),
+            Err(false) => None,
+        },
+    };
+    match commit {
+        Some(text) => (at, vec![text], false),
+        None => (at, Vec::new(), false),
+    }
+}
+
+fn commit_from_passes(docs: &[Value], id: &str) -> Result<Option<String>, bool> {
     let want = normalize_test_id(id);
     for doc in docs {
         let Some(Value::Object(pairs)) = doc.get("test_passes") else {
@@ -380,21 +402,12 @@ fn commits_for(docs: &[Value], id: &str, row: &Value) -> Vec<String> {
         };
         for (key, value) in pairs {
             if normalize_test_id(key) == want {
-                if let Some(text) = commit_text(value.get("commit")) {
-                    return vec![text];
-                }
+                let (commit, bad) = crate::fresh::read_commit(value.get("commit"));
+                return if bad { Err(true) } else { Ok(commit) };
             }
         }
     }
-    Vec::new()
-}
-
-fn commit_text(value: Option<&Value>) -> Option<String> {
-    value
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(str::to_string)
+    Ok(None)
 }
 
 fn older(left: Option<f64>, right: Option<f64>) -> Option<f64> {

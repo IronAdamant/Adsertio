@@ -20,7 +20,7 @@ It deliberately does not:
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Standard library only, no Cargo crates. One binary: the `adsertio` CLI and the `adsertio-mcp` stdio server (`adsertio mcp` is the same program).
+Standard library only, no Cargo crates. Two binaries from one program: `adsertio` and `adsertio-mcp` (`adsertio mcp` is the same program).
 
 ## Install
 
@@ -109,11 +109,12 @@ Claude Code (`.mcp.json`) or Cursor (`.cursor/mcp.json`):
 |---|---|
 | `adsertio_claim` | Record a claim. Never overwrites. |
 | `adsertio_attach` | Add pointers to an existing claim. Returns the new count and the pointers just added. A bad or duplicate pointer writes nothing. |
-| `adsertio_view` | Verdict and the state of every pointer. One page. |
-| `adsertio_ls` | Id, summary, and pointer count. No verdict. One page. |
+| `adsertio_view` | Verdict and the state of every pointer. Every match, unless limit or offset is set. |
+| `adsertio_ls` | Id, summary, and pointer count. No verdict. Every claim, unless limit or offset is set. |
+| `adsertio_check` | Fail on a damaged claim, a bad file name, a bad created time, a stale lock, or a malformed timestamp. |
 | `adsertio_guide` | Pointer shapes, the verdict rule, paging, and what to call after compaction. |
 
-The same names without the `adsertio_` prefix are CLI commands, plus `init`, `check`, and `mcp`.
+The same names without the `adsertio_` prefix are CLI commands, plus `init` and `mcp`.
 
 Per pointer the state is `pass`, `fail`, `missing`, `unreadable`, `no_adapter`, `inconclusive`, or `stale`. Per claim:
 

@@ -13,6 +13,9 @@ use std::fs;
 
 pub const EVIDENCE_TOOLS: &[&str] = &["trammel", "chisel", "probatio"];
 pub const MAX_SUMMARY: usize = 200;
+pub const MAX_POINTERS: usize = 50;
+pub const MAX_BODY_BYTES: usize = 20_000;
+pub const MAX_CLAIM_BYTES: u64 = 256 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Claim {
@@ -246,12 +249,22 @@ fn cmp_id(left: &str, right: &str) -> std::cmp::Ordering {
 /// Every claim, oldest first. A damaged claim fails the whole read.
 pub fn load_all(store: &Store) -> Result<Vec<Claim>, String> {
     let dir = store.claims_dir();
-    let rd = match fs::read_dir(&dir) {
-        Ok(r) => r,
+    match fs::symlink_metadata(&dir) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(".adsertio/claims is a symlink; refusing to follow it. Run `adsertio init` so claims is a real folder inside the project.".into());
+        }
+        Ok(meta) if !meta.is_dir() => {
+            return Err(".adsertio/claims is not a folder. Run `adsertio init`.".into());
+        }
+        Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             eprintln!("no claims store found at {}; run init", store.dir.display());
             return Ok(Vec::new());
         }
+        Err(e) => return Err(format!("cannot read {}: {e}", dir.display())),
+    }
+    let rd = match fs::read_dir(&dir) {
+        Ok(r) => r,
         Err(e) => return Err(format!("cannot read {}: {e}", dir.display())),
     };
     let mut claims = Vec::new();
@@ -272,11 +285,24 @@ pub fn load_all(store: &Store) -> Result<Vec<Claim>, String> {
             ));
         }
         let Some(id) = name.strip_suffix(".md").filter(|_| ft.is_file()) else {
-            return Err(format!(
-                "unexpected entry {} in the claims folder",
-                path.display()
-            ));
+            eprintln!(
+                "skipping .adsertio/claims/{name}: not a claim file. adsertio check reports it."
+            );
+            continue;
         };
+        if !fsx::valid_slug(id) {
+            eprintln!(
+                "skipping .adsertio/claims/{name}: \"{id}\" is not a claim id. Use a slug. adsertio check reports it."
+            );
+            continue;
+        }
+        let len = e
+            .metadata()
+            .map_err(|err| format!("cannot stat {}: {err}", path.display()))?
+            .len();
+        if len > MAX_CLAIM_BYTES {
+            return Err(format!("claim {id} is larger than {MAX_CLAIM_BYTES} bytes"));
+        }
         let text = fsx::read_strict(&path)?;
         claims.push(
             Claim::parse(id, &text)

@@ -34,3 +34,29 @@ try {
 finally {
     $zip.Dispose()
 }
+$head = New-Object byte[] 2
+$stream = [System.IO.File]::OpenRead($dest)
+try {
+    $read = $stream.Read($head, 0, 2)
+} finally {
+    $stream.Dispose()
+}
+if ($read -ne 2 -or $head[0] -ne 0x50 -or $head[1] -ne 0x4B) {
+    throw "zip does not start with PK: $dest"
+}
+$check = [System.IO.Compression.ZipFile]::OpenRead($dest)
+try {
+    $names = @($check.Entries | ForEach-Object { $_.FullName })
+} finally {
+    $check.Dispose()
+}
+foreach ($entry in $names) {
+    if ($entry.Contains([char]92)) {
+        throw "zip entry uses a backslash: $entry"
+    }
+}
+$want = @("$prefix/adsertio.exe", "$prefix/adsertio-mcp.exe") | Sort-Object
+$got = @($names | Sort-Object)
+if (($want -join "`n") -ne ($got -join "`n")) {
+    throw "zip entries are [$($got -join ', ')], want [$($want -join ', ')]"
+}

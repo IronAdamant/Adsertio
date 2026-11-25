@@ -64,6 +64,7 @@ fn evidence(pointer: &str, state: State, detail: impl Into<String>) -> Evidence 
         detail: detail.into(),
         at: None,
         commits: Vec::new(),
+        malformed: false,
     }
 }
 
@@ -326,7 +327,8 @@ fn load_results(
             read::read_json_file(&path, &rel_file, "probatio")?
         } else {
             return Err(ReadError::Unreadable(format!(
-                "{rel_file} is a folder; point at a file"
+                "{rel_file} {}",
+                crate::fsx::not_a_file(&meta)
             )));
         };
         let outcome = outcome_of(&value)

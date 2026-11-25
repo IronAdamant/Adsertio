@@ -207,7 +207,8 @@ fn read_bytes(path: &Path, label: &str) -> Result<Vec<u8>, ReadError> {
         .map_err(|e| ReadError::Unreadable(format!("cannot stat {label}: {e}")))?;
     if !meta.is_file() {
         return Err(ReadError::Unreadable(format!(
-            "{label} is a folder; point at a file"
+            "{label} {}",
+            crate::fsx::not_a_file(&meta)
         )));
     }
     if meta.len() > MAX_EVIDENCE_BYTES {

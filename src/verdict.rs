@@ -28,7 +28,8 @@ pub enum State {
     /// The file was read and it is neither a pass nor a fail: a mutation
     /// timeout, a run with no kill and no survivor, or an unchecked ledger.
     Inconclusive,
-    /// A pass that is too old, or tied to a commit that is not HEAD.
+    /// A pass that is too old, tied to a commit that is not HEAD, or stamped
+    /// with a timestamp or commit this version cannot read.
     /// Only a pass is downgraded; a failure stays a failure.
     Stale,
 }
@@ -56,6 +57,8 @@ pub struct Evidence {
     pub at: Option<f64>,
     /// Commits the evidence names. Empty when it names none.
     pub commits: Vec<String>,
+    /// The evidence named a timestamp or commit that is not a usable value.
+    pub malformed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -94,6 +97,7 @@ pub fn read_evidence(project: &Path, pointer: &str) -> Evidence {
         detail,
         at: None,
         commits: Vec::new(),
+        malformed: false,
     };
     if let Err(e) = claim::valid_pointer(pointer) {
         return mk(State::Unreadable, e);
@@ -121,7 +125,7 @@ pub fn read_evidence(project: &Path, pointer: &str) -> Evidence {
     if !meta.is_file() {
         return mk(
             State::Unreadable,
-            format!("{path} is a folder; point at a file"),
+            format!("{path} {}", fsx::not_a_file(&meta)),
         );
     }
     if meta.len() > MAX_EVIDENCE_BYTES {
