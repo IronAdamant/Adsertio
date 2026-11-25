@@ -63,6 +63,25 @@ pub fn is_sqlite(bytes: &[u8]) -> bool {
 /// carry `schema_version`. A damaged snapshot is [`ReadError::Unreadable`],
 /// never an empty plan list, even when a journal sits beside it.
 pub fn read_trammel(project: &Path, rel: &str) -> Result<Snapshot, ReadError> {
+    let loaded = load_trammel_text(project, rel)?;
+    let doc = parse_json(&loaded.text, rel)?;
+    check_trammel_schema(&doc, rel)?;
+    Ok(Snapshot {
+        doc,
+        journal_applied: loaded.journal_applied,
+    })
+}
+
+/// The JSON text the Trammel adapter judges: the snapshot, or the last
+/// journal line that carries `schema_version`. The snapshot is checked as
+/// JSON even when a journal line replaces it. The caller checks
+/// `schema_version`.
+pub struct TrammelText {
+    pub text: String,
+    pub journal_applied: bool,
+}
+
+pub fn load_trammel_text(project: &Path, rel: &str) -> Result<TrammelText, ReadError> {
     let path = open_contained(project, rel)?;
     let parent = parent_dir(&path)?;
     let _guard = lock_sibling(project, &parent, "lock")?;
@@ -71,18 +90,53 @@ pub fn read_trammel(project: &Path, rel: &str) -> Result<Snapshot, ReadError> {
         return Err(ReadError::Unreadable(sqlite_message("trammel")));
     }
     let text = decode(&bytes, rel)?;
-    let mut doc = parse_json(&text, rel)?;
-    let journal_applied = apply_journal(project, &parent, &mut doc)?;
+    // A damaged snapshot is unreadable even when a journal sits beside it.
+    // Validating here does not build a value; the caller parses the document
+    // it actually judges.
+    json_document(&text, rel)?;
+    let (text, journal_applied) = match journal_line(project, &parent)? {
+        Some(line) => (line, true),
+        None => (text, false),
+    };
+    Ok(TrammelText {
+        text,
+        journal_applied,
+    })
+}
+
+pub fn check_trammel_schema(doc: &Value, rel: &str) -> Result<(), ReadError> {
     match doc.get("schema_version").and_then(Value::as_i64) {
-        Some(1) => Ok(Snapshot {
-            doc,
-            journal_applied,
-        }),
+        Some(1) => Ok(()),
         Some(version) => Err(ReadError::Unreadable(format!(
             "{rel} has schema_version {version}, which this reader does not understand"
         ))),
         None => Err(ReadError::Unreadable(format!(
             "{rel} has no schema_version after the snapshot and journal were read. A damaged store is not treated as empty"
+        ))),
+    }
+}
+
+/// One Chisel snapshot as text, after the shared lock, the size cap, and the
+/// SQLite check. Magic and compact tables are the caller's job.
+pub fn load_chisel_text(project: &Path, rel: &str) -> Result<String, ReadError> {
+    let path = open_contained(project, rel)?;
+    let parent = parent_dir(&path)?;
+    let _guard = lock_sibling(project, &parent, "chisel.lock")?;
+    let bytes = read_bytes(&path, rel)?;
+    if is_sqlite(&bytes) {
+        return Err(ReadError::Unreadable(sqlite_message("chisel")));
+    }
+    decode(&bytes, rel)
+}
+
+/// An array of row objects, or a compact table expanded to those rows.
+pub fn rows_from_table(value: Value, label: &str, key: &str) -> Result<Vec<Value>, ReadError> {
+    match value {
+        Value::Array(rows) => Ok(rows),
+        other if other.get("table").is_some() => expand_table(&other)
+            .map_err(|e| ReadError::Unreadable(format!("{label} {key} compact table: {e}"))),
+        _ => Err(ReadError::Unreadable(format!(
+            "{label} {key} is neither a list of rows nor a compact table"
         ))),
     }
 }
@@ -235,13 +289,21 @@ fn parse_json(text: &str, label: &str) -> Result<Value, ReadError> {
     json::parse(text).map_err(|e| ReadError::Unreadable(format!("{label} is not valid JSON: {e}")))
 }
 
-/// Apply `.trammel/journal`. Empty lines are ignored. Any other line that is
-/// not a JSON document with `schema_version` fails the read. The snapshot is
-/// left unchanged when the journal is absent. This never deletes the journal.
-fn apply_journal(project: &Path, dir: &Path, doc: &mut Value) -> Result<bool, ReadError> {
+fn json_document(text: &str, label: &str) -> Result<(), ReadError> {
+    let mut parser = json::Parser::new(text);
+    parser
+        .skip_value(0)
+        .and_then(|_| parser.finish())
+        .map_err(|e| ReadError::Unreadable(format!("{label} is not valid JSON: {e}")))
+}
+
+/// The last non-empty journal line that is JSON and carries `schema_version`.
+/// Empty lines are ignored. Any other line fails the read. Absent journal is
+/// `Ok(None)`. This never deletes the journal.
+fn journal_line(project: &Path, dir: &Path) -> Result<Option<String>, ReadError> {
     let journal = dir.join("journal");
     match fs::symlink_metadata(&journal) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(ReadError::Unreadable(format!("cannot stat journal: {e}"))),
         Ok(_) => {}
     }
@@ -251,7 +313,7 @@ fn apply_journal(project: &Path, dir: &Path, doc: &mut Value) -> Result<bool, Re
         return Err(ReadError::Unreadable(sqlite_message("trammel")));
     }
     let text = decode(&bytes, "journal")?;
-    let mut applied = false;
+    let mut chosen: Option<String> = None;
     for (index, line) in text.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
@@ -265,10 +327,9 @@ fn apply_journal(project: &Path, dir: &Path, doc: &mut Value) -> Result<bool, Re
                 index + 1
             )));
         }
-        *doc = value;
-        applied = true;
+        chosen = Some(line.to_string());
     }
-    Ok(applied)
+    Ok(chosen)
 }
 
 fn expand_compact(doc: &mut Value, label: &str) -> Result<(), ReadError> {

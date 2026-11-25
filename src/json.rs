@@ -207,12 +207,206 @@ pub fn parse(input: &str) -> Result<Value, JsonError> {
     Ok(v)
 }
 
-struct Parser<'a> {
+pub(crate) enum Kind {
+    Null,
+    Bool,
+    Number,
+    String,
+    Array,
+    Object,
+}
+
+/// A JSON number, kept as written so integers and fractions stay distinct.
+pub(crate) struct Number {
+    text: String,
+}
+
+impl Number {
+    pub(crate) fn as_i64(&self) -> Option<i64> {
+        Value::Number(self.text.clone()).as_i64()
+    }
+
+    pub(crate) fn as_value(&self) -> Value {
+        Value::Number(self.text.clone())
+    }
+}
+
+pub(crate) struct Parser<'a> {
     s: &'a [u8],
     i: usize,
 }
 
 impl Parser<'_> {
+    pub(crate) fn new(input: &str) -> Parser<'_> {
+        Parser {
+            s: input.as_bytes(),
+            i: 0,
+        }
+    }
+
+    pub(crate) fn finish(&mut self) -> Result<(), JsonError> {
+        self.skip_ws();
+        if self.i != self.s.len() {
+            Err(self.err("trailing data after the JSON value"))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn kind(&mut self) -> Result<Kind, JsonError> {
+        self.skip_ws();
+        match self.peek() {
+            Some(b'n') => Ok(Kind::Null),
+            Some(b't' | b'f') => Ok(Kind::Bool),
+            Some(b'"') => Ok(Kind::String),
+            Some(b'[') => Ok(Kind::Array),
+            Some(b'{') => Ok(Kind::Object),
+            Some(b'-' | b'0'..=b'9') => Ok(Kind::Number),
+            Some(_) => Err(self.err("unexpected character")),
+            None => Err(self.err("unexpected end of input")),
+        }
+    }
+
+    pub(crate) fn take_value(&mut self, depth: usize) -> Result<Value, JsonError> {
+        self.skip_ws();
+        self.value(depth)
+    }
+
+    pub(crate) fn take_string(&mut self) -> Result<String, JsonError> {
+        self.skip_ws();
+        if self.peek() != Some(b'"') {
+            return Err(self.err("expected a string"));
+        }
+        self.string()
+    }
+
+    pub(crate) fn take_bool(&mut self) -> Result<bool, JsonError> {
+        self.skip_ws();
+        match self.peek() {
+            Some(b't') => self.eat("true").map(|_| true),
+            Some(b'f') => self.eat("false").map(|_| false),
+            _ => Err(self.err("expected a boolean")),
+        }
+    }
+
+    pub(crate) fn take_number(&mut self) -> Result<Number, JsonError> {
+        self.skip_ws();
+        let value = self.number()?;
+        match value {
+            Value::Number(text) => Ok(Number { text }),
+            _ => Err(self.err("expected a number")),
+        }
+    }
+
+    pub(crate) fn skip_value(&mut self, depth: usize) -> Result<(), JsonError> {
+        self.skip_ws();
+        match self.peek() {
+            None => Err(self.err("unexpected end of input")),
+            Some(b'n') => self.eat("null"),
+            Some(b't') => self.eat("true"),
+            Some(b'f') => self.eat("false"),
+            Some(b'"') => self.skip_string(),
+            Some(b'[') => self.skip_array(depth),
+            Some(b'{') => self.skip_object(depth),
+            Some(b'-' | b'0'..=b'9') => self.number().map(|_| ()),
+            Some(_) => Err(self.err("unexpected character")),
+        }
+    }
+
+    /// Call `on_key` once per field. The callback must consume exactly one value.
+    pub(crate) fn with_object<E: From<JsonError>>(
+        &mut self,
+        depth: usize,
+        mut on_key: impl FnMut(&mut Self, &str, usize) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let depth = self.enter(depth)?;
+        self.skip_ws();
+        if self.peek() != Some(b'{') {
+            return Err(self.err("expected an object").into());
+        }
+        self.i += 1;
+        let mut seen: Vec<String> = Vec::new();
+        self.skip_ws();
+        if self.peek() == Some(b'}') {
+            self.i += 1;
+            return Ok(());
+        }
+        loop {
+            self.skip_ws();
+            if self.peek() != Some(b'"') {
+                return Err(self.err("expected a string key").into());
+            }
+            let key = self.string()?;
+            if seen.iter().any(|seen| seen == &key) {
+                return Err(self.err(&format!("duplicate key \"{key}\"")).into());
+            }
+            seen.push(key);
+            self.skip_ws();
+            if self.peek() != Some(b':') {
+                return Err(self.err("expected ':'").into());
+            }
+            self.i += 1;
+            self.skip_ws();
+            let key = seen.last().unwrap().clone();
+            on_key(self, &key, depth)?;
+            self.skip_ws();
+            match self.peek() {
+                Some(b',') => self.i += 1,
+                Some(b'}') => {
+                    self.i += 1;
+                    return Ok(());
+                }
+                _ => return Err(self.err("expected ',' or '}'").into()),
+            }
+        }
+    }
+
+    /// Call `on_item` once per element. The callback must consume that value.
+    pub(crate) fn with_array<E: From<JsonError>>(
+        &mut self,
+        depth: usize,
+        mut on_item: impl FnMut(&mut Self, usize) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let _child = self.enter(depth)?;
+        self.skip_ws();
+        if self.peek() != Some(b'[') {
+            return Err(self.err("expected an array").into());
+        }
+        self.i += 1;
+        self.skip_ws();
+        if self.peek() == Some(b']') {
+            self.i += 1;
+            return Ok(());
+        }
+        let mut index = 0usize;
+        loop {
+            self.skip_ws();
+            on_item(self, index)?;
+            index += 1;
+            self.skip_ws();
+            match self.peek() {
+                Some(b',') => self.i += 1,
+                Some(b']') => {
+                    self.i += 1;
+                    return Ok(());
+                }
+                _ => return Err(self.err("expected ',' or ']'").into()),
+            }
+        }
+    }
+
+    fn skip_array(&mut self, depth: usize) -> Result<(), JsonError> {
+        self.with_array(depth, |parser, _| parser.skip_value(depth + 1))
+    }
+
+    fn skip_object(&mut self, depth: usize) -> Result<(), JsonError> {
+        self.with_object(depth, |parser, _, child| parser.skip_value(child))
+    }
+
+    fn skip_string(&mut self) -> Result<(), JsonError> {
+        self.string_into(None)
+    }
+
     fn err(&self, what: &str) -> JsonError {
         JsonError {
             message: format!("{what} at byte {}", self.i),
@@ -223,7 +417,7 @@ impl Parser<'_> {
         self.s.get(self.i).copied()
     }
 
-    fn skip_ws(&mut self) {
+    pub(crate) fn skip_ws(&mut self) {
         while matches!(self.peek(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
             self.i += 1;
         }
@@ -376,13 +570,19 @@ impl Parser<'_> {
     }
 
     fn string(&mut self) -> Result<String, JsonError> {
+        let mut out = Vec::new();
+        self.string_into(Some(&mut out))?;
+        // Input came from a &str and escapes were encoded as UTF-8.
+        String::from_utf8(out).map_err(|_| self.err("invalid UTF-8 in string"))
+    }
+
+    fn string_into(&mut self, mut out: Option<&mut Vec<u8>>) -> Result<(), JsonError> {
         self.i += 1;
-        let mut out: Vec<u8> = Vec::new();
         loop {
             let b = self.peek().ok_or_else(|| self.err("unterminated string"))?;
             self.i += 1;
             match b {
-                b'"' => break,
+                b'"' => return Ok(()),
                 b'\\' => {
                     let e = self.peek().ok_or_else(|| self.err("unterminated escape"))?;
                     self.i += 1;
@@ -417,68 +617,22 @@ impl Parser<'_> {
                         }
                         _ => return Err(self.err("invalid escape")),
                     };
-                    let mut buf = [0u8; 4];
-                    out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                    if let Some(out) = out.as_mut() {
+                        let mut buf = [0u8; 4];
+                        out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                    }
                 }
                 0x00..=0x1f => return Err(self.err("control character in string")),
-                _ => out.push(b),
+                _ => {
+                    if let Some(out) = out.as_mut() {
+                        out.push(b);
+                    }
+                }
             }
         }
-        // Input came from a &str and escapes were encoded as UTF-8.
-        String::from_utf8(out).map_err(|_| self.err("invalid UTF-8 in string"))
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn round_trips_basic_values() {
-        let v = parse(r#"{"a":[1,2.5e3,"x\n\u00e9\ud83d\ude00"],"b":null,"c":true}"#).unwrap();
-        assert_eq!(parse(&v.to_json()).unwrap(), v);
-    }
-
-    #[test]
-    fn deep_nesting_is_an_error_not_a_crash() {
-        let deep = "[".repeat(100_000);
-        assert!(parse(&deep).is_err());
-        let ok = format!("{}{}", "[".repeat(MAX_DEPTH), "]".repeat(MAX_DEPTH));
-        assert!(parse(&ok).is_ok());
-        let too = format!("{}{}", "[".repeat(MAX_DEPTH + 1), "]".repeat(MAX_DEPTH + 1));
-        assert!(parse(&too).is_err());
-    }
-
-    #[test]
-    fn rejects_duplicates_controls_and_lone_surrogates() {
-        assert!(parse(r#"{"a":1,"a":2}"#).is_err());
-        assert!(parse("\"a\nb\"").is_err());
-        assert!(parse(r#""\ud800""#).is_err());
-        assert!(parse("01").is_err());
-        assert!(parse("[1,]").is_err());
-        assert!(parse("{} x").is_err());
-    }
-
-    #[test]
-    fn integers_only_for_as_u64() {
-        assert_eq!(parse("42").unwrap().as_u64(), Some(42));
-        assert_eq!(parse("-1").unwrap().as_u64(), None);
-        assert_eq!(parse("1.0").unwrap().as_u64(), None);
-        assert_eq!(parse("99999999999999999999999").unwrap().as_u64(), None);
-    }
-
-    #[test]
-    fn integers_and_floats_stay_distinct() {
-        assert_eq!(parse("-2").unwrap().as_i64(), Some(-2));
-        assert_eq!(parse("1.5").unwrap().as_i64(), None);
-        assert_eq!(parse("1e2").unwrap().as_i64(), None);
-        assert_eq!(parse("1.5").unwrap().as_f64(), Some(1.5));
-        assert_eq!(parse("1").unwrap().as_f64(), Some(1.0));
-        assert!(parse("1e9999").unwrap().as_f64().is_none());
-        let mut obj = parse(r#"{"a":1,"b":2}"#).unwrap();
-        assert_eq!(obj.take("b").unwrap().as_i64(), Some(2));
-        obj.insert("a", Value::int(3));
-        assert_eq!(obj.get("a").unwrap().as_i64(), Some(3));
-        assert!(obj.get("b").is_none());
-    }
-}
+#[path = "json_tests.rs"]
+mod tests;

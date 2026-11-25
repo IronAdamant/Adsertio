@@ -2,7 +2,7 @@
 
 ## Project overview
 
-**Adsertio** 1.1.1 is two binaries from one program (`adsertio`, `adsertio-mcp`) that give
+**Adsertio** 1.2.0 is two binaries from one program (`adsertio`, `adsertio-mcp`) that give
 one verified-or-unverified view per claim, read from the evidence Trammel, Chisel and
 Probatio leave on disk. It does not call an LLM.
 
@@ -11,15 +11,27 @@ Probatio leave on disk. It does not call an LLM.
 
 ## Active context
 
-- **Version:** 1.1.1. 1.0.0 is the tagged GitHub release. 1.1.1 is the next tag. Not published to npm or crates.io.
-- **1.1.1:** review fixes on top of the 1.1.0 read cache, guide, and paging. See `docs/perf/`.
+- **Version:** 1.2.0. 1.0.0 and 1.1.1 stay the tags they are. 1.2.0 is the next tag. Not published to npm or crates.io.
+- **1.2.0:** page-scoped views, indexed Trammel and Chisel lookups, a stable `after` cursor, and recovery of dead attach locks and temp files. See `docs/perf/1.2.0.md`.
 - **Built:** claim, attach, view, ls; Trammel, Chisel, and Probatio readers;
   freshness; strict store; hostile-input tests.
 - **Not built:** worktree overlays, a ledger re-catch verdict, Libellus id
   resolution, release binaries, npm. See SPEC.md section 8.
-- **Next:** tag v1.1.1 after this branch is merged. Do not move the v1.0.0 tag.
+- **Next:** tag v1.2.0 on the merge commit. Do not move v1.0.0 or v1.1.1.
 
 ## Session log
+
+---
+
+## 1.2.0: fourth stress test
+
+**Date:** 2026-11-25
+
+- A paged view judges the page, not the whole store. `counts_complete` says whether the count is the whole scope.
+- Trammel and Chisel rows are indexed once per snapshot per call. `check` uses that cache and does not run git.
+- `after` is a `created/id` cursor. The hint uses it. `offset` remains.
+- A dead attach pid, a future-mtime lock that is not live, and a temp file whose pid is gone are removed. A live pid is left for 5 seconds, then the attach fails.
+- Re-measured the overload cases from the fourth stress test before and after. Numbers are in `docs/perf/1.2.0.md`.
 
 ---
 

@@ -103,7 +103,7 @@ fn a_stale_claim_lock_is_replaced_and_a_fresh_one_conflicts() {
     let body = std::fs::read_to_string(dir.join(".adsertio/claims/held.md")).unwrap();
     assert!(body.contains("#plan-stale"), "{body}");
 
-    std::fs::write(&lock, "live\n").unwrap();
+    std::fs::write(&lock, format!("{}\n", std::process::id())).unwrap();
     let before = body;
     let blocked = Command::new(CLI)
         .args([

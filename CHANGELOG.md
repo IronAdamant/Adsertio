@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0
+
+The fourth stress test. A page no longer walks every claim against every evidence row. A Trammel or Chisel snapshot is indexed once per call. On this machine a 20,000-claim page that took 249 s in 1.1.1 took 0.48 s, and the full view of that store took 0.50 s. RSS for the 14.9 MiB plus 11.5 MiB pair dropped from 238 MiB to 72 MiB. The re-measure, including what did not get cheaper, is in `docs/perf/1.2.0.md`.
+
+- `adsertio_view` takes `after`, the `created/id` cursor from `next_after`. Claims stay ordered by `created`, then by id. The hint uses `after`, so a verdict that changes behind the cursor does not skip a later claim. `offset` still skips a count of matches and can skip one when a verdict changes. `next_offset` is set only when the call did not pass `after`.
+- A page judges the claims it returns, plus non-matches and `offset` skips on the way there. It does not judge the rest of the store. `counts` covers the claims that were judged. `counts_complete` is true when that is the whole scope. Omit `limit` to judge every matching claim and get a complete count.
+- `check` uses the same per-call evidence cache as `view`. It checks malformed timestamps and commits and does not run git. One snapshot is still read once, not once per claim.
+- An attach lock starts with the holder pid. A pid that is not running is removed at once. Text that is not a pid is removed once the file is a second old, or at once when the mtime is in the future. A live pid is kept: the call waits 5 seconds, then fails, and the claim file is unchanged. A future mtime does not keep a dead lock.
+- A temp file under `.adsertio/claims` whose pid is not running is removed on the next read, attach, or check. A live writer's temp is left in place, and `check` still lists it.
+
 ## 1.1.1
 
 The third review. Correctness only. A re-measure is in `docs/perf/1.1.1.md`; it is not a speedup.

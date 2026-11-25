@@ -36,10 +36,13 @@ cargo build --release --locked
 
 ## Layout
 
-- `src/json.rs` bounded JSON. `src/fsx.rs` atomic writes, path and slug guards.
+- `src/json.rs` bounded JSON. `src/json_tests.rs` parser tests.
+- `src/fsx.rs` atomic writes, path and slug guards. `src/proc.rs` live pids.
 - `src/lock.rs` shared locks. `src/read.rs` snapshots, the journal, compact tables.
 - `src/trammel.rs`, `src/chisel.rs`, `src/probatio.rs` the adapters.
-- `src/cache.rs` reuses one parsed snapshot for every claim in a single view.
+- `src/trammel_idx.rs`, `src/chisel_idx.rs` one index per snapshot per call.
+- `src/paging.rs` view pages and the `after` cursor.
+- `src/cache.rs` reuses one indexed snapshot, and one `git rev-parse HEAD`, for every claim in a single view or check.
 - `src/fresh.rs` timestamp and commit checks. `src/verdict.rs` states and `combine`.
 - `src/tool.rs` tool table types and argument validation. `src/tools.rs` the tools.
 - `src/mcp.rs` the server. `src/groups.rs` the `agent-tools` block.
@@ -48,5 +51,6 @@ cargo build --release --locked
 - `.github/workflows/release.yml` builds the GitHub release when a `v*` tag is pushed. No npm, no crates.io.
 - `tests/hostile_input.rs`, `tests/claims_and_evidence.rs`,
   `tests/cli_and_groups.rs`, `tests/reader.rs`, `tests/trammel.rs`,
-  `tests/chisel.rs`, `tests/probatio.rs`, `tests/fresh.rs`, `tests/attach_ls.rs`:
+  `tests/chisel.rs`, `tests/probatio.rs`, `tests/fresh.rs`, `tests/attach_ls.rs`,
+  `tests/load.rs`:
   the failure modes the design avoids. Keep them passing.

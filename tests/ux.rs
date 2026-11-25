@@ -70,9 +70,15 @@ fn lists_are_paged_and_counts_stay_complete() {
     assert!(!all[0].contains("\"hint\""), "{}", all[0]);
 
     let viewed = talk(&dir, call("adsertio_view", r#"{"limit":1}"#, 1).as_bytes());
-    assert!(viewed[0].contains(r#"\"unverified\":3"#), "{}", viewed[0]);
+    assert!(viewed[0].contains(r#"\"unverified\":1"#), "{}", viewed[0]);
+    assert!(
+        viewed[0].contains(r#"\"counts_complete\":false"#),
+        "{}",
+        viewed[0]
+    );
     assert!(viewed[0].contains(r#"\"truncated\":true"#), "{}", viewed[0]);
     assert!(viewed[0].contains("next: adsertio_view"), "{}", viewed[0]);
+    assert!(viewed[0].contains(r#"\\\"after\\\""#), "{}", viewed[0]);
 
     let bad = talk(&dir, call("adsertio_ls", r#"{"limit":0}"#, 1).as_bytes());
     assert!(

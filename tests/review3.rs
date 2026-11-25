@@ -37,10 +37,16 @@ fn a_truncated_hint_keeps_the_view_filters() {
     );
     assert!(is_ok(&page[0]), "{}", page[0]);
     assert!(
-        page[0].contains(
-            r#"next: adsertio_view with {\\\"verdict\\\":\\\"unverified\\\",\\\"compact\\\":true,\\\"limit\\\":1,\\\"offset\\\":1}"#
-        ),
+        page[0].contains(r#"\\\"verdict\\\":\\\"unverified\\\""#)
+            && page[0].contains(r#"\\\"compact\\\":true"#)
+            && page[0].contains(r#"\\\"limit\\\":1"#)
+            && page[0].contains(r#"\\\"after\\\":\\\""#),
         "{}",
+        page[0]
+    );
+    assert!(
+        !page[0].contains(r#"\\\"offset\\\""#),
+        "the hint uses after, not offset: {}",
         page[0]
     );
 
@@ -320,12 +326,12 @@ fn check_reports_a_stale_attach_lock() {
         .current_dir(&dir)
         .output()
         .unwrap();
-    assert!(!checked.status.success());
-    let msg = String::from_utf8_lossy(&checked.stderr);
     assert!(
-        msg.contains("stale lock") && msg.contains("adsertio_attach"),
-        "{msg}"
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
     );
+    assert!(!lock.exists(), "a dead lock is removed by check");
 }
 
 #[test]
@@ -352,6 +358,7 @@ fn docs_match_the_two_binaries_and_the_unpaged_list() {
     let log = include_str!("../LLM_Development.md");
     assert!(!log.contains("1.1.0 in the tree, on a branch"));
     assert!(log.contains("1.1.1"));
+    assert!(log.contains("1.2.0"));
     let script = include_str!("../.github/scripts/zip-forward.ps1");
     assert!(script.contains("0x50") && script.contains("0x4B"));
     assert!(script.contains("adsertio.exe") && script.contains("adsertio-mcp.exe"));

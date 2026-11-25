@@ -15,7 +15,7 @@ USAGE
   adsertio init                       create .adsertio/ in this folder
   adsertio claim --summary S [--evidence tool:path[#selector]]... [--author A] [--body B] [--id I] [--tags T]...
   adsertio attach --id I --evidence tool:path[#selector]...
-  adsertio view [--id I] [--verdict verified|refuted|unverified] [--states S]... [--compact] [--limit N] [--offset N]
+  adsertio view [--id I] [--verdict verified|refuted|unverified] [--states S]... [--compact] [--limit N] [--offset N] [--after CURSOR]
   adsertio ls [--limit N] [--offset N]
   adsertio guide
   adsertio check                      read every claim; fail on any damage

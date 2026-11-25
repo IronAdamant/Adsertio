@@ -181,6 +181,10 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
 }
 
 fn head_commit(project: &Path) -> Result<String, String> {
+    crate::cache::head(project, || head_commit_uncached(project))
+}
+
+fn head_commit_uncached(project: &Path) -> Result<String, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(project)

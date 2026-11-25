@@ -165,34 +165,52 @@ file fails the whole view and the whole list. It is not left out.
   Attach will not go past that.
 - `adsertio_check` `{}` is the same read as `adsertio check`. It fails on a
   damaged claim, a file in `claims` that is not `slug.md`, a `created` time
-  that is not `YYYY-MM-DDTHH:MM:SSZ`, a stale attach lock, or a pass whose
-  timestamp or commit is malformed.
-- `adsertio_view` `{id?, verdict?, states?, compact?, limit?, offset?}` returns
-  `{claims, counts, truncated, next_offset, hint?}`. Each claim has `id`,
-  `summary`, `verdict`, and `evidence` (`pointer`, `state`, and `detail` unless
-  `compact` is true). `states` is a list of `verified`, `refuted`, and
-  `unverified`. Pass `verdict` or `states`, not both. `counts` covers every
-  claim in the read, whatever the filter keeps.
+  that is not `YYYY-MM-DDTHH:MM:SSZ`, or a pass whose timestamp or commit is
+  malformed. It reads each evidence file once per call and does not run git.
+  An attach lock or temp file whose writer is gone is removed. A live writer
+  is left alone, and check does not fail because of that lock.
+- `adsertio_view` `{id?, verdict?, states?, compact?, limit?, offset?, after?}`
+  returns `{claims, counts, counts_complete, truncated, next_offset, next_after, hint?}`.
+  Each claim has `id`, `summary`, `verdict`, and `evidence` (`pointer`, `state`,
+  and `detail` unless `compact` is true). `states` is a list of `verified`,
+  `refuted`, and `unverified`. Pass `verdict` or `states`, not both. `counts`
+  tallies the claims this call judged. `counts_complete` is true when that is
+  every claim in the scope: the one `id`, or the whole store when `after` is
+  omitted and the call reads through to the end. A page stops once it has
+  `limit` matches. It may judge one further claim only to see that another
+  page exists, and that claim is not added to `counts`.
+- Claims are ordered by `created`, then by id, with number runs compared as
+  integers (`c2` before `c10`). `after` is the `created/id` value in
+  `next_after`. The next page starts strictly after that claim, so a verdict
+  that changes on an earlier claim does not skip a later one. `offset` still
+  skips that many matches from the start of this call and can skip a claim
+  when a verdict changes between pages. When `truncated` is true, `hint` names
+  the next call and uses `after`, repeating `id`, `verdict`, `states`, and
+  `compact` when they were set. `next_offset` is set only when the call did
+  not pass `after`. A list of more than 100 claims, with no limit, also
+  includes `hint`.
 - `adsertio_ls` `{limit?, offset?}` returns `{claims, count, truncated, next_offset, hint?}`.
   Each claim has `id`, `summary`, and `pointers`. It does not read evidence and
-  does not include a verdict. `count` is the whole store.
-- With no `limit` and no `offset`, `adsertio_view` and `adsertio_ls` return every
-  matching claim. `limit` is then 1 to 500 and `offset` skips that many.
-  `truncated` is true when another page exists. `next_offset` is the offset to
-  pass next (or null), and `hint` names the next call, repeating `id`,
-  `verdict`, `states`, and `compact` when they were set. A list of more than 100
-  claims, with no limit, also includes `hint`. `counts` is not reduced by the page.
-- `adsertio_attach` locks that one claim for the read and the write. A lock
-  older than 30 seconds is stale and is removed. If the lock is still held, the
-  call fails and the file is unchanged.
+  does not include a verdict. `count` is the whole store. With no `limit` and
+  no `offset`, `adsertio_ls` returns every claim. `limit` is 1 to 500.
+- With no `limit`, `adsertio_view` returns every matching claim in its scope.
+  `limit` is 1 to 500 when it is set.
+- `adsertio_attach` locks that one claim for the read and the write. The lock
+  file starts with the holder pid. A pid that is not running is removed at
+  once. Text that is not a pid is removed once the file is a second old, or at
+  once when the mtime is in the future. A live pid is kept: the call waits 5
+  seconds and then fails, and the file is unchanged. A future mtime does not
+  keep a dead lock.
 - A pointer path with a backslash, a drive letter, a leading slash, or `..` is
   an error at `adsertio_claim` and `adsertio_attach`. Use a relative path with
   forward slashes inside the project.
 - `adsertio_guide` `{}` returns pointer shapes, the verdict rule, paging, and
   what to call after compaction. It does not read the store.
 
-One `view` call reads a given Trammel snapshot, Chisel snapshot, or Probatio
-`results/` directory once and reuses that parse for every claim in the call.
+One `view` or `check` call reads a given Trammel snapshot, Chisel snapshot, or
+Probatio `results/` directory once, indexes the rows a selector needs, and
+reuses that index for every claim in the call. A paged `view` judges only the
+claims on that page.
 
 Arguments are checked against the schema: unknown arguments, wrong types,
 missing required arguments, and values outside an `enum` are errors with

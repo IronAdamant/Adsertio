@@ -72,7 +72,7 @@ evidence: [trammel:.trammel/store#plan-1/step-1]
 ---
 ```
 
-There is no `verdict` field. `adsertio view` computes it. `adsertio ls` lists id, summary, and pointer count, and does not read the evidence. With no `limit` or `offset`, both return every matching claim. Pass `limit` (1 to 500) and `offset` to page. When `truncated` is true, `hint` gives the next call and `next_offset` is the offset to pass. `count` and `counts` still cover the whole store. `adsertio view --states` keeps one or more of verified, refuted, and unverified. `--compact` drops evidence detail. `adsertio guide` (MCP name `adsertio_guide`) is the short reminder of pointer shapes and what to call after a conversation is compacted.
+There is no `verdict` field. `adsertio view` computes it. `adsertio ls` lists id, summary, and pointer count, and does not read the evidence. With no `limit`, both return every matching claim. Pass `limit` (1 to 500) to page. For `view`, follow `hint`: it passes `after`, the `next_after` cursor (`created/id`). Claims are ordered by `created`, then by id. A verdict that changes behind the cursor does not skip a later claim. `offset` still skips a count of matches and can skip one when a verdict changes. `counts` on a page covers the claims that page judged, and `counts_complete` says whether that is the whole scope. `count` on `ls` is still the whole store. `adsertio view --states` keeps one or more of verified, refuted, and unverified. `--compact` drops evidence detail. `adsertio guide` (MCP name `adsertio_guide`) is the short reminder of pointer shapes and what to call after a conversation is compacted.
 
 Pointers are `tool:path[#selector]`. The tool is `trammel`, `chisel`, or `probatio`. The path is inside the project. Selectors are in [SPEC.md](SPEC.md). In short:
 
@@ -109,9 +109,9 @@ Claude Code (`.mcp.json`) or Cursor (`.cursor/mcp.json`):
 |---|---|
 | `adsertio_claim` | Record a claim. Never overwrites. |
 | `adsertio_attach` | Add pointers to an existing claim. Returns the new count and the pointers just added. A bad or duplicate pointer writes nothing. |
-| `adsertio_view` | Verdict and the state of every pointer. Every match, unless limit or offset is set. |
+| `adsertio_view` | Verdict and the state of every pointer. Every match, unless limit is set. Page with `after`. |
 | `adsertio_ls` | Id, summary, and pointer count. No verdict. Every claim, unless limit or offset is set. |
-| `adsertio_check` | Fail on a damaged claim, a bad file name, a bad created time, a stale lock, or a malformed timestamp. |
+| `adsertio_check` | Fail on a damaged claim, a bad file name, a bad created time, or a malformed timestamp. Removes a lock or temp whose writer is gone. |
 | `adsertio_guide` | Pointer shapes, the verdict rule, paging, and what to call after compaction. |
 
 The same names without the `adsertio_` prefix are CLI commands, plus `init` and `mcp`.
