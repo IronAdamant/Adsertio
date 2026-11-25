@@ -2,7 +2,6 @@
 mod common;
 use common::*;
 use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime};
 
 #[test]
 fn parallel_attaches_keep_every_successful_pointer() {
@@ -58,78 +57,6 @@ fn parallel_attaches_keep_every_successful_pointer() {
         .filter(|n| text.contains(&format!("#plan-{n}")))
         .count();
     assert_eq!(kept, 12, "only {kept} of 12 pointers kept\n{text}");
-}
-
-#[test]
-fn a_stale_claim_lock_is_replaced_and_a_fresh_one_conflicts() {
-    let dir = project("stale-lock");
-    init(&dir);
-    let made = Command::new(CLI)
-        .args(["claim", "--summary", "Held", "--id", "held"])
-        .current_dir(&dir)
-        .output()
-        .unwrap();
-    assert!(
-        made.status.success(),
-        "{}",
-        String::from_utf8_lossy(&made.stderr)
-    );
-    let lock = dir.join(".adsertio/claims/.held.md.lock");
-    std::fs::write(&lock, "dead\n").unwrap();
-    let old = SystemTime::now() - Duration::from_secs(120);
-    std::fs::File::options()
-        .write(true)
-        .open(&lock)
-        .unwrap()
-        .set_modified(old)
-        .unwrap();
-    let stole = Command::new(CLI)
-        .args([
-            "attach",
-            "--id",
-            "held",
-            "--evidence",
-            "trammel:.trammel/store#plan-stale",
-        ])
-        .current_dir(&dir)
-        .output()
-        .unwrap();
-    assert!(
-        stole.status.success(),
-        "{}",
-        String::from_utf8_lossy(&stole.stderr)
-    );
-    assert!(!lock.exists(), "stale lock was left behind");
-    let body = std::fs::read_to_string(dir.join(".adsertio/claims/held.md")).unwrap();
-    assert!(body.contains("#plan-stale"), "{body}");
-
-    std::fs::write(&lock, format!("{}\n", std::process::id())).unwrap();
-    let before = body;
-    let blocked = Command::new(CLI)
-        .args([
-            "attach",
-            "--id",
-            "held",
-            "--evidence",
-            "trammel:.trammel/store#plan-live",
-        ])
-        .current_dir(&dir)
-        .output()
-        .unwrap();
-    assert!(!blocked.status.success());
-    let msg = format!(
-        "{}{}",
-        String::from_utf8_lossy(&blocked.stdout),
-        String::from_utf8_lossy(&blocked.stderr)
-    );
-    assert!(
-        msg.contains("another attach") && msg.contains("nothing was written"),
-        "{msg}"
-    );
-    let after = std::fs::read_to_string(dir.join(".adsertio/claims/held.md")).unwrap();
-    assert_eq!(before, after);
-    assert!(lock.exists());
-    std::fs::remove_file(&lock).unwrap();
 }
 
 #[test]

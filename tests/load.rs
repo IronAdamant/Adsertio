@@ -3,7 +3,7 @@
 mod common;
 use common::*;
 use std::process::Command;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 fn claim(dir: &std::path::Path, id: &str, created: &str, evidence: &str) {
     let evidence = if evidence.is_empty() {
@@ -106,117 +106,6 @@ fn a_cursor_does_not_skip_when_an_earlier_verdict_changes() {
         "{shifted}"
     );
     assert!(!shifted.contains("\"id\":\"c\""), "{shifted}");
-}
-
-#[test]
-fn a_dead_pid_lock_and_a_future_mtime_are_recovered_at_once() {
-    let dir = project("dead-lock");
-    init(&dir);
-    let made = Command::new(CLI)
-        .args(["claim", "--summary", "Held", "--id", "held"])
-        .current_dir(&dir)
-        .output()
-        .unwrap();
-    assert!(
-        made.status.success(),
-        "{}",
-        String::from_utf8_lossy(&made.stderr)
-    );
-    let mut child = Command::new(CLI)
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
-    let pid = child.id();
-    child.wait().unwrap();
-    let lock = dir.join(".adsertio/claims/.held.md.lock");
-    std::fs::write(&lock, format!("{pid} 1\n")).unwrap();
-    let started = Instant::now();
-    let stole = Command::new(CLI)
-        .args([
-            "attach",
-            "--id",
-            "held",
-            "--evidence",
-            "trammel:.trammel/store#plan-1/step-1",
-        ])
-        .current_dir(&dir)
-        .output()
-        .unwrap();
-    assert!(
-        stole.status.success(),
-        "{}",
-        String::from_utf8_lossy(&stole.stderr)
-    );
-    assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "dead pid lock blocked for {:?}",
-        started.elapsed()
-    );
-
-    std::fs::write(&lock, "not-a-pid\n").unwrap();
-    std::fs::File::options()
-        .write(true)
-        .open(&lock)
-        .unwrap()
-        .set_modified(SystemTime::now() + Duration::from_secs(3600))
-        .unwrap();
-    let started = Instant::now();
-    let again = Command::new(CLI)
-        .args([
-            "attach",
-            "--id",
-            "held",
-            "--evidence",
-            "trammel:.trammel/store#plan-1/step-2",
-        ])
-        .current_dir(&dir)
-        .output()
-        .unwrap();
-    assert!(
-        again.status.success(),
-        "{}",
-        String::from_utf8_lossy(&again.stderr)
-    );
-    assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "future mtime blocked for {:?}",
-        started.elapsed()
-    );
-}
-
-#[test]
-fn abandoned_temp_files_are_removed_and_a_live_one_is_kept() {
-    let dir = project("temps");
-    init(&dir);
-    claim(&dir, "held", "2020-01-01T00:00:00Z", "");
-    let claims = dir.join(".adsertio/claims");
-    let live = claims.join(format!(".held.md.tmp-{}-1", std::process::id()));
-    std::fs::write(&live, b"still writing").unwrap();
-    let mut child = Command::new(CLI)
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
-    let pid = child.id();
-    child.wait().unwrap();
-    let dead = claims.join(format!(".held.md.tmp-{pid}-2"));
-    std::fs::write(&dead, b"killed").unwrap();
-    let checked = Command::new(CLI)
-        .arg("check")
-        .current_dir(&dir)
-        .output()
-        .unwrap();
-    let out = String::from_utf8_lossy(&checked.stdout).to_string();
-    assert!(
-        checked.status.success(),
-        "{}",
-        String::from_utf8_lossy(&checked.stderr)
-    );
-    assert!(live.exists(), "a live writer's temp was removed");
-    assert!(out.contains(".tmp-"), "{out}");
-    assert!(!dead.exists(), "a dead writer's temp was kept");
-    assert!(!out.contains(&format!("tmp-{pid}-")), "{out}");
 }
 
 #[test]

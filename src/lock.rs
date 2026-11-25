@@ -127,45 +127,17 @@ fn unix_flock(file: &File, kind: Kind) -> io::Result<()> {
 
 #[cfg(windows)]
 fn windows_lock(file: &File, kind: Kind) -> io::Result<()> {
+    use crate::oslock::sys::{overlapped, LockFileEx, UnlockFileEx};
     use std::os::windows::io::AsRawHandle;
     const LOCKFILE_FAIL_IMMEDIATELY: u32 = 0x0000_0001;
     #[cfg(test)]
     const LOCKFILE_EXCLUSIVE_LOCK: u32 = 0x0000_0002;
-    #[repr(C)]
-    struct Overlapped {
-        internal: usize,
-        internal_high: usize,
-        offset: u32,
-        offset_high: u32,
-        event: isize,
-    }
-    extern "system" {
-        fn LockFileEx(
-            file: isize,
-            flags: u32,
-            reserved: u32,
-            low: u32,
-            high: u32,
-            overlapped: *mut Overlapped,
-        ) -> i32;
-        fn UnlockFileEx(
-            file: isize,
-            reserved: u32,
-            low: u32,
-            high: u32,
-            overlapped: *mut Overlapped,
-        ) -> i32;
-    }
-    let handle = file.as_raw_handle() as isize;
-    let mut ov = Overlapped {
-        internal: 0,
-        internal_high: 0,
-        offset: 0,
-        offset_high: 0,
-        event: 0,
-    };
+    let handle = file.as_raw_handle();
+    let mut ov = overlapped();
     // One byte at the start. Chisel locks that byte. A whole-file lock, which
     // is what a Rust `File::lock` takes, overlaps it, so either writer blocks us.
+    // SAFETY: the handle is open for the life of `file`; `ov` outlives the
+    // call, which does not keep it (the handle is synchronous).
     let rc = match kind {
         Kind::Shared => unsafe { LockFileEx(handle, LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &mut ov) },
         #[cfg(test)]

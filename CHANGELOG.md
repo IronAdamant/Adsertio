@@ -25,6 +25,51 @@ Chisel pass went stale because HEAD moved.
   a dirty `chisel run -- cargo test` on a crate with a new test, committed
   exactly, committed with claims and store, and changed after the run.
 
+Operating-system attach locks. An attach lock was `.<id>.md.lock`, made
+with `create_new` and holding a pid, a time and a token, so an attach that
+was killed left it behind and Adsertio had to guess when it was stale: a
+dead pid (which pid reuse and separate pid namespaces get wrong), no pid
+after one second, a mtime in the future, its own pid after 30 seconds, and a
+`.break` guard so only one waiter removed it. Now the lock is `flock` on
+Unix and `LockFileEx` on Windows, on a lock file kept open while held. The
+kernel releases it when the holder exits or is killed, so a killed attach
+blocks nobody and there is nothing to guess.
+
+- Each claim has its own lock file, `.adsertio/locks/<id>.lock`, created by
+  the first attach to that claim and never deleted (deleting a held lock
+  file lets a second attach lock a new file at that name). Per-claim files
+  keep attaches to different claims running side by side, as before; there
+  is at most one file per claim, since an attach to an id with no claim
+  file takes no lock. One store-wide lock would have meant one file, but
+  would make every attach wait for every other. `check` and `doctor` do not
+  look in `locks/`. A symlinked `locks` folder is refused.
+- A `.<id>.md.lock` or `.<id>.md.lock.break` left by 1.3 blocks nothing.
+  `view` and `ls` skip it, `doctor` lists it under `leftover_files`, and
+  `check` and `doctor --fix` delete it. Running 1.3 and 1.4 attaches on one
+  store at the same time is not supported: they take different locks.
+- The busy error is unchanged: after 5 seconds, `this claim is being
+  updated by another attach. Retry adsertio_attach; nothing was written.`
+- Temp files are judged by age only: one over an hour old is removed. The
+  pid in a temp name is no longer checked, and a temp with a mtime in the
+  future is no longer removed at once. No pid is checked anywhere.
+- `doctor` has a `file_system` check on every platform, which warns (and
+  passes, with a `fix`) when the store is on a network file system, where
+  `flock` may be emulated or not shared between machines: a macOS mount
+  without `MNT_LOCAL`, a Linux NFS, SMB, CIFS, 9P, AFS, Coda or Ceph
+  `f_type` (x86_64 and aarch64), or a Windows UNC path or remote drive. It
+  replaces the Windows-only `network_drive` check, which failed.
+- `src/oslock.rs` is Libellus 1.4.0's lock module, std only. On Windows,
+  `src/lock.rs` (the shared locks on Trammel's and Chisel's lock files,
+  which behave as before) now uses its `LockFileEx` declarations.
+- Removed: `fsx::break_abandoned_lock`, `fsx::lock_held`,
+  `fsx::lock_file_is_stale`, the `.break` guard, the lock token, the Windows
+  access-denied retry when creating the lock, and `src/proc.rs`
+  (`pid_alive`, `kill(pid, 0)`, `OpenProcess`).
+- `tests/oslock.rs`: a second attach waits for a held lock and both pointers
+  are kept, an attach to another claim does not wait, a holder killed with
+  SIGKILL (TerminateProcess on Windows) frees the lock at once, 1.3 lock
+  files block nothing and `check` removes them, and temp files go by age.
+
 ## 1.3.1
 
 - `adsertio view --if-store` (CLI only) prints nothing and exits 0 when no

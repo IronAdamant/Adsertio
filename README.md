@@ -194,7 +194,7 @@ For Claude Code (`.mcp.json`) or Cursor (`.cursor/mcp.json`):
 | `adsertio_attach` | Add pointers to existing claims. Pass `items`, a list of `{id, evidence}`, for several claims in one call. A bad or duplicate pointer writes nothing. |
 | `adsertio_view` | The verdict and the state of every pointer. |
 | `adsertio_ls` | Id, summary, and pointer count. No verdict. |
-| `adsertio_doctor` | What is wrong with the store, damaged claims, git, or the evidence files, each with a fix. `fix: true` clears a lock or temp file left by a writer that is gone. |
+| `adsertio_doctor` | What is wrong with the store, damaged claims, git, or the evidence files, each with a fix. `fix: true` clears temp files over an hour old and lock files left by Adsertio 1.3. |
 | `adsertio_guide` | Pointer shapes, the verdict rule, paging, and what to do after the conversation is compacted. |
 
 Each tool is also a CLI command without the `adsertio_` prefix. `adsertio check`, which fails on any damaged claim, is a CLI command only (for scripts and CI); over MCP, `adsertio_doctor` reports the same problems.
@@ -227,13 +227,14 @@ so the agent sees the claims that are not verified and reads them again instead 
 - where the store is, and `ADSERTIO_DIR`
 - that the claims folder takes a new file (it writes and removes a probe the way a new claim is written)
 - the claim count, any damaged claim, and any pass whose timestamp or commit is malformed
-- temp or lock files left by a process that is gone
+- temp files over an hour old, and attach lock files left in `claims` by Adsertio 1.3
+- whether the store is on a network file system, where file locks may not hold between machines (a warning; the check still passes)
 - `git` on `PATH`, and what `git rev-parse HEAD` says
 - `.trammel/store`, `.chisel/store` and `.probatio`: there or not, size against the read limits, and whether Adsertio can read them
 - that `adsertio-mcp` sits next to `adsertio`
-- on Windows, how close the store path is to the 260-character limit, and whether it is on a network drive
+- on Windows, how close the store path is to the 260-character limit
 
-It exits 0 when every check passes and 1 when one fails. Doctor only reads. `doctor --fix` also removes the temp and lock files a dead process left, which `check` already does, and lists them in `fixed`. It never repairs a claim and never touches another tool's files.
+It exits 0 when every check passes and 1 when one fails. Doctor only reads. `doctor --fix` also removes those temp and 1.3 lock files, which `check` already does, and lists them in `fixed`. It never repairs a claim and never touches another tool's files.
 
 The server has one tool group, `core`, which is always on. You can still name it in the `agent-tools` block of a project's AGENTS.md; see [AGENTS.snippet.md](AGENTS.snippet.md). A mistake in that line falls back to `core` and says why.
 
@@ -262,7 +263,7 @@ When something is wrong, Adsertio says so instead of guessing. Each of these is 
 - **Files it cannot trust are not proof.** A path that leaves the project, a Trammel or Chisel store over 1 GiB (Chisel's own limit), any other evidence file over 64 MiB, a file that is not UTF-8, a damaged Trammel or Chisel store, or a broken Probatio result is `unreadable`, never an empty pass. An old SQLite store gets a hint to run `trammel migrate` or `chisel migrate`.
 - **Probatio runs must be finished.** An outcome Probatio does not write is `unreadable`. A `flaky`, `error` or `no coverage` result, a run with results missing, or a run whose mutant list cannot be checked, is `inconclusive`.
 - **Chisel results come from the main store.** Chisel records test results only in `.chisel/store`. A pointer at it also reads the test edges in every shard, however the path is written (`./`, `//`, or through a symlink), but a shard's own result rows are never used. A pointer into `.chisel/overlays/` is not read, whatever its letter case or however a symlink reaches it.
-- **Safe writes.** Writes land whole through a temp file. A new claim never overwrites another, and attach replaces only its own claim, under a lock. If an attach is killed, exactly one later writer takes over its lock, so concurrent attaches never lose a pointer.
+- **Safe writes.** Writes land whole through a temp file. A new claim never overwrites another, and attach replaces only its own claim, under an operating-system lock on `.adsertio/locks/<id>.lock` (`flock` on Unix, `LockFileEx` on Windows). Attaches to one claim take turns, so none loses a pointer; attaches to different claims run side by side. If an attach is killed, the kernel releases its lock at once: there is no stale lock to wait out or clear.
 - **Hands off other tools' files.** Adsertio takes a shared lock when Trammel or Chisel has a lock file, and never creates their locks or deletes their temp files or journals.
 - **A strict server.** Bad JSON, oversized messages and batches get a JSON-RPC error and the server keeps running. Unknown methods and misspelt arguments are errors. A tool that panics is contained.
 

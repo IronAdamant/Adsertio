@@ -24,6 +24,11 @@ for the format and `README.md` for what is built.
 - Writes go through `fsx::write_atomic`. New claims use `overwrite = false`.
   Attach overwrites only that claim file.
 - Unknown arguments are errors. New tools go in the `tools::TOOLS` table.
+- Attach locks are operating-system locks (`src/oslock.rs`) on
+  `.adsertio/locks/<id>.lock`. Never delete a lock file: a writer that locks
+  a new file at the same name while another holds the old one breaks the
+  lock. Do not add pid, age or token checks to judge a lock; the kernel
+  releases it when the holder dies. Temp files are judged by age only.
 
 ## Commands
 
@@ -37,8 +42,11 @@ cargo build --release --locked
 ## Layout
 
 - `src/json.rs` bounded JSON. `src/json_tests.rs` parser tests.
-- `src/fsx.rs` atomic writes, path and slug guards. `src/proc.rs` live pids.
-- `src/lock.rs` shared locks. `src/read.rs` snapshots, the journal, compact tables.
+- `src/fsx.rs` atomic writes, the attach lock, the temp sweep, path and slug guards.
+- `src/oslock.rs` exclusive operating-system file locks (`flock`, `LockFileEx`)
+  and the network file system probe, std only, shared with Libellus.
+- `src/lock.rs` shared locks on Trammel's and Chisel's lock files.
+  `src/read.rs` snapshots, the journal, compact tables.
 - `src/trammel.rs`, `src/chisel.rs`, `src/probatio.rs` the adapters.
 - `src/trammel_idx.rs`, `src/chisel_idx.rs` one index per snapshot per call.
 - `src/paging.rs` view pages and the `after` cursor.
@@ -56,7 +64,8 @@ cargo build --release --locked
   `tests/chisel.rs`, `tests/probatio.rs`, `tests/fresh.rs`, `tests/attach_ls.rs`,
   `tests/load.rs`, `tests/fixes.rs`, `tests/perf.rs`, `tests/ux.rs`,
   `tests/review3.rs`, `tests/review4.rs`, `tests/review5.rs`,
-  `tests/v130.rs`, `tests/v140.rs`, `tests/tool_budget.rs`, `tests/zero_deps.rs`:
+  `tests/v130.rs`, `tests/v140.rs`, `tests/oslock.rs`, `tests/tool_budget.rs`,
+  `tests/zero_deps.rs`:
   the failure modes the design avoids. Keep them passing. `tests/common/mod.rs`
   holds shared helpers. Fixtures in `tests/fixtures/probatio/real` and
   `tests/fixtures/chisel/real-*` were written by the real tools; prefer that

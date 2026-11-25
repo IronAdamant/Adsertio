@@ -4,8 +4,9 @@
 //! Doctor only reads, with two exceptions. It writes and removes one probe
 //! file in the claims folder, through `fsx::write_atomic` with
 //! `overwrite = false`, to show that a new claim can be written there. With
-//! `fix` it removes the temp files and attach locks whose writer is gone,
-//! which `check` already does. It never writes into another tool's folder.
+//! `fix` it removes temp files over an hour old and the attach lock files
+//! 1.3 left in `claims`, which `check` already does. It never deletes a lock
+//! file in `.adsertio/locks/` and never writes into another tool's folder.
 
 use crate::fsx;
 use crate::json::Value;
@@ -96,10 +97,8 @@ pub fn run(fix: bool) -> Value {
         checks.push(leftovers_check(&dir, fix));
         if cfg!(windows) {
             checks.push(path_length_check(&absolute(&dir)));
-            if let Some(check) = network_check(&absolute(&dir)) {
-                checks.push(check);
-            }
         }
+        checks.push(file_system_check(&absolute(&store.dir)));
     }
     checks.push(git_check(&project));
     crate::cache::with_cache(|| {
@@ -171,8 +170,8 @@ fn writable_check(dir: &Path) -> Check {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or_default();
-    // A work-file name: if this process dies before removing it, the next
-    // check or doctor --fix sees a dead pid and removes it.
+    // A temp-file name: if this process dies before removing it, check or
+    // doctor --fix removes it once it is an hour old.
     let probe = dir.join(format!(".doctor.tmp-{}-{nanos}", std::process::id()));
     match fsx::write_atomic(&probe, b"adsertio doctor probe\n", false) {
         Ok(()) => match std::fs::remove_file(&probe) {
@@ -245,7 +244,7 @@ fn leftovers_check(dir: &Path, fixed: bool) -> Check {
         String::new()
     } else {
         format!(
-            "; in use by a live writer, left alone: {}",
+            "; temp files under an hour old, which a writer may still own, left alone: {}",
             clip_list(&live)
         )
     };
@@ -253,17 +252,19 @@ fn leftovers_check(dir: &Path, fixed: bool) -> Check {
         let done = if fixed { " after --fix" } else { "" };
         return Check::pass(
             "leftover_files",
-            format!("no temp or lock files left by a writer that is gone{done}{live_note}"),
+            format!(
+                "no temp file over an hour old and no lock file from Adsertio 1.3{done}{live_note}"
+            ),
         );
     }
     Check::fail(
         "leftover_files",
         format!(
-            "{} file(s) left by a writer that is gone: {}{live_note}",
+            "{} file(s) to remove, temp files over an hour old or lock files from Adsertio 1.3 (which block nothing): {}{live_note}",
             dead.len(),
             clip_list(&dead)
         ),
-        "Run adsertio doctor --fix (or adsertio check) to remove them. A live writer's files are never removed.",
+        "Run adsertio doctor --fix (or adsertio check) to remove them. The lock files in .adsertio/locks are kept, and a temp file under an hour old is never removed.",
     )
 }
 
@@ -333,51 +334,25 @@ fn path_length_check(dir: &Path) -> Check {
     }
 }
 
-/// `Some` only on Windows, when the drive type can be read.
-fn network_check(dir: &Path) -> Option<Check> {
-    let text = dir.as_os_str().to_string_lossy().to_string();
-    let unc =
-        text.starts_with(r"\\?\UNC\") || (text.starts_with(r"\\") && !text.starts_with(r"\\?\"));
-    let remote = if unc {
-        true
-    } else {
-        let bare = text.strip_prefix(r"\\?\").unwrap_or(&text);
-        let bytes = bare.as_bytes();
-        if bytes.len() < 2 || bytes[1] != b':' || !bytes[0].is_ascii_alphabetic() {
-            return None;
-        }
-        drive_is_remote(&format!("{}:\\", bytes[0] as char))?
-    };
-    Some(if remote {
-        Check::fail(
-            "network_drive",
-            format!("{text} is on a network drive"),
-            "Move the project to a local disk. Attach locks, hard links and file times are not reliable on network shares, so two agents could clash.",
-        )
-    } else {
-        Check::pass("network_drive", "the store is on a local drive")
-    })
-}
-
-#[cfg(windows)]
-fn drive_is_remote(root: &str) -> Option<bool> {
-    const DRIVE_NO_ROOT_DIR: u32 = 1;
-    const DRIVE_REMOTE: u32 = 4;
-    extern "system" {
-        fn GetDriveTypeW(root: *const u16) -> u32;
+/// A store on a network file system: operating-system locks there may be
+/// emulated or not shared between machines, and hard links and file times may
+/// not behave. A warning, not a failure: the check passes with a `fix`.
+fn file_system_check(dir: &Path) -> Check {
+    match crate::oslock::network_fs(dir) {
+        Some(kind) => Check {
+            name: "file_system",
+            ok: true,
+            detail: format!(
+                "{} is on a network file system ({kind}); file locks there may be emulated or not shared between machines, so two attaches on different machines could both get the lock",
+                dir.display()
+            ),
+            fix: Some("Keep the project on a local disk, or let only one machine write claims to it.".into()),
+        },
+        None => Check::pass(
+            "file_system",
+            "the store is on a local file system, or this platform cannot tell: attach locks are reliable",
+        ),
     }
-    let wide: Vec<u16> = root.encode_utf16().chain(std::iter::once(0)).collect();
-    // SAFETY: `wide` is a NUL-terminated UTF-16 string that outlives the call.
-    let kind = unsafe { GetDriveTypeW(wide.as_ptr()) };
-    match kind {
-        0 | DRIVE_NO_ROOT_DIR => None,
-        other => Some(other == DRIVE_REMOTE),
-    }
-}
-
-#[cfg(not(windows))]
-fn drive_is_remote(_root: &str) -> Option<bool> {
-    None
 }
 
 fn git_check(project: &Path) -> Check {

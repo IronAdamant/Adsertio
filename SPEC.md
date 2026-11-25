@@ -12,6 +12,7 @@ does not understand is `unreadable` or `no_adapter`, never `pass`.
 ```
 .adsertio/
   claims/<id>.md        one claim per file; <id> is a slug
+  locks/<id>.lock       that claim's attach lock (section 6), kept
 ```
 
 - The store is the nearest `.adsertio/` walking up from the working directory,
@@ -22,10 +23,11 @@ does not understand is `unreadable` or `no_adapter`, never `pass`.
 - `<id>` is a slug: `[a-z0-9][a-z0-9-]*`, at most 64 bytes, one segment.
 - A symlink in the claims folder, or any file that is not `<id>.md`, is an
   error for `check`. `view` and `ls` leave it out and warn on stderr. This
-  includes dotfiles. The only exceptions are Adsertio's own files while a
-  write or attach is in flight: `.<name>.tmp-<pid>-<n>`, `.<id>.md.lock`, and
-  `.<id>.md.lock.break`, and macOS Finder's `.DS_Store`, which every command
-  ignores.
+  includes dotfiles. The only exceptions are Adsertio's own temp files
+  (`.<name>.tmp-<pid>-<n>`), the lock files Adsertio 1.3 and earlier left
+  there (`.<id>.md.lock` and `.<id>.md.lock.break`, see section 6), and macOS
+  Finder's `.DS_Store`, which every command ignores. `.adsertio/locks/` is
+  not read by `check`, `view` or `ls`.
 
 ## 2. Claims
 
@@ -269,8 +271,9 @@ file fails the whole view and the whole list. It is not left out.
   damaged claim, a file in `claims` that is not `slug.md`, a `created` time
   that is not `YYYY-MM-DDTHH:MM:SSZ`, or a pass whose timestamp or commit is
   malformed. It reads each evidence file once per call and does not run git.
-  An attach lock or temp file whose writer is gone is removed. A live writer
-  is left alone, and check does not fail because of that lock.
+  It first removes temp files in `claims` over an hour old and any lock file
+  1.3 left there, and lists the temp files that remain in `stray_temp_files`
+  (they do not fail it). It never deletes a file in `.adsertio/locks/`.
 - `adsertio_view` `{id?, verdict?, states?, compact?, limit?, offset?, after?}`
   returns `{claims, counts, counts_complete, truncated, next_offset, next_after, hint?}`.
   Each claim has `id`, `summary`, `verdict`, and `evidence` (`pointer`, `state`,
@@ -302,17 +305,37 @@ file fails the whole view and the whole list. It is not left out.
   no `offset`, `adsertio_ls` returns every claim. `limit` is 1 to 500.
 - With no `limit`, `adsertio_view` returns every matching claim in its scope.
   `limit` is 1 to 500 when it is set.
-- `adsertio_attach` locks that one claim for the read and the write. The lock
-  file starts with the holder pid. A pid that is not running is removed at
-  once. Text that is not a pid is removed once the file is a second old. A
-  mtime more than a couple of seconds in the future, with no live pid, is
-  removed at once. A couple of seconds ahead is treated as clock skew while
-  the pid line is written. A live pid is kept: the call waits 5 seconds and
-  then fails, and the file is unchanged. A future mtime does not keep a dead
-  lock. Only the holder of the `<lock>.break` guard removes a dead lock, after
-  judging it again while holding the guard, so a lock taken a moment later is
-  never removed. A holder removes its lock only while the file still holds
-  the line it wrote.
+- `adsertio_attach` locks that one claim for the read and the write: an
+  operating-system lock on `.adsertio/locks/<id>.lock`, opened read-write
+  (created when missing, 0600 on Unix, in a `locks` folder made 0700) and
+  kept open while held. Unix takes `flock(fd, LOCK_EX | LOCK_NB)`; Windows
+  takes `LockFileEx` with `LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY`
+  on the whole file. A busy lock is retried with a sleep of 1 to 10 ms for up
+  to 5 seconds; then the call fails with `this claim is being updated by
+  another attach. Retry adsertio_attach; nothing was written.` and the claim
+  is unchanged. The kernel releases the lock when the holder closes the file,
+  exits or is killed, so there is no stale lock: no pid, age or token is
+  written or judged. Each claim has its own lock, so attaches to different
+  claims do not wait for each other. Lock files are empty and never deleted
+  (removing a held one would let a second attach lock a new file at that
+  name), and there is at most one per claim: an attach to an id with no
+  claim file takes no lock and creates no file. A symlink at `locks` or at a
+  lock file, or a `locks` that is not a folder, is an error. Locks are
+  advisory: an edit by hand takes none. On some NFS and SMB set-ups `flock`
+  is emulated or not shared between machines, so two attaches from
+  different machines could both hold one; `doctor` warns (section 7).
+- Files from 1.3: 1.3 locked with `.<id>.md.lock` in `claims` (a pid, a time
+  and a token, created exclusive and deleted on release) and a
+  `.<id>.md.lock.break` guard. 1.4 never uses those names, so one left in a
+  store blocks nothing. `view` and `ls` skip them, `doctor` lists them under
+  `leftover_files`, and `check` or `doctor --fix` deletes them. Running 1.3
+  and 1.4 attaches on one store at the same time is not supported: they take
+  different locks.
+- Temp files (`.<name>.tmp-<pid>-<n>`) are judged by age only: one whose
+  mtime is more than an hour old is abandoned, and `view`, `ls`, `check` and
+  `doctor --fix` remove it. The pid in the name is not checked. A write
+  holds its temp for milliseconds; a writer paused for longer only loses
+  that write (its rename or link fails), since temp names are never reused.
 - A pointer path with a backslash, a drive letter, a leading slash, or `..` is
   an error at `adsertio_claim` and `adsertio_attach`. Use a relative path with
   forward slashes inside the project.
@@ -377,9 +400,9 @@ when every check passes. The CLI prints the JSON either way and exits 0 when
 | `store` | no store is found, or `ADSERTIO_DIR` names one that does not exist, or `claims` is not a real folder. The detail says whether `ADSERTIO_DIR` is set |
 | `store_writable` | a probe file cannot be written with `fsx::write_atomic` (`overwrite = false`, a hard link, as a new claim is) and removed |
 | `claims` | a claim is damaged, a file in `claims` is not `slug.md`, a `created` time is malformed, or a pass a pointer names has a malformed timestamp or commit (each evidence file is read once; git is not run) |
-| `leftover_files` | a temp file, attach lock, or break guard is left by a writer that is gone. A live writer's files are listed and pass |
+| `leftover_files` | `claims` holds a temp file over an hour old, or a `.<id>.md.lock` or `.<id>.md.lock.break` file from 1.3. Younger temp files are listed and pass. Files in `.adsertio/locks/` are never listed |
 | `path_length` | Windows only: the claims folder path plus the longest name Adsertio writes there (104 characters) reaches 260 |
-| `network_drive` | Windows only, when the drive type can be read: the store is on a network drive or a UNC path |
+| `file_system` | never; it warns (passes with a `fix`) when the store is on a network file system, where file locks may be emulated or not shared between machines: on macOS a mount without `MNT_LOCAL` (autofs trigger points aside), on Linux x86_64 and aarch64 an `f_type` of NFS, SMB, CIFS, SMB2, 9P, AFS, Coda or Ceph, on Windows a UNC path or a drive `GetDriveTypeW` calls remote. Other platforms are not checked |
 | `git` | `git` is not on `PATH`, or `git rev-parse HEAD` fails in the project |
 | `trammel_store`, `chisel_store` | the file is over the 1 GiB limit, or present and not readable by Adsertio (read the way a pointer reads it, shared lock included) |
 | `probatio` | `.probatio` is not a folder, or a run folder in it (one holding `results/`, `run.json`, `tally.json` or `ledger.json`, up to two levels down, at most 50) is `unreadable` |
@@ -387,8 +410,8 @@ when every check passes. The CLI prints the JSON either way and exits 0 when
 
 Without a store, the store checks are left out and the rest run in the
 working folder. Doctor reads only, except the probe file. `--fix` (or
-`fix: true`) first removes the temp files, abandoned locks, and stale break
-guards whose writer is gone, using the same rules as `check`, then runs the
+`fix: true`) first removes the temp files over an hour old and the 1.3 lock
+files in `claims`, using the same rules as `check`, then runs the
 checks and lists the removed names in `fixed`. It changes nothing else.
 
 ## 8. Protocol behaviour

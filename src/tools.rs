@@ -515,7 +515,6 @@ fn attach_batch(store: &Store, a: &Args) -> Result<Value, String> {
 /// the lock, that the attach would succeed now.
 fn attach_one(store: &Store, id: &str, incoming: &[String], write: bool) -> Result<Value, String> {
     let path = fsx::join_id(&store.claims_dir(), id, 1)?.with_extension("md");
-    let lock = store.claims_dir().join(format!(".{id}.md.lock"));
     let body = || {
         let meta = match std::fs::symlink_metadata(&path) {
             Ok(meta) => meta,
@@ -569,7 +568,11 @@ fn attach_one(store: &Store, id: &str, incoming: &[String], write: bool) -> Resu
         ]))
     };
     if write {
-        fsx::with_claim_lock(&lock, body)
+        // No lock file for an id with no claim: one lock file per claim, at most.
+        if std::fs::symlink_metadata(&path).is_err() {
+            return body();
+        }
+        fsx::with_claim_lock(&store.attach_lock(id)?, body)
     } else {
         body()
     }
@@ -799,37 +802,31 @@ pub fn store_check() -> Result<Value, String> {
 pub struct Findings {
     pub claims: usize,
     pub problems: Vec<String>,
-    /// Temp files still there after the sweep (a live writer's, or all of
-    /// them when `clean` is false).
+    /// Temp files still there after the sweep (younger than an hour, or all
+    /// of them when `clean` is false).
     pub strays: Vec<String>,
 }
 
-/// The claim checks `check` and `doctor` share. With `clean`, abandoned
-/// temp files and locks are removed first, as `check` does. With
-/// `evidence`, every pointer is read once for a malformed timestamp or commit.
-/// `Err` is a claim that could not be read at all.
+/// The claim checks `check` and `doctor` share. With `clean`, temp files
+/// over an hour old and the lock files 1.3 left in `claims` are removed
+/// first, as `check` does. With `evidence`, every pointer is read once for a
+/// malformed timestamp or commit. `Err` is a claim that could not be read at
+/// all. The lock files in `.adsertio/locks/` are not looked at.
 pub fn claim_problems(store: &Store, clean: bool, evidence: bool) -> Result<Findings, String> {
     let mut problems = Vec::new();
     let mut strays = Vec::new();
     let dir = store.claims_dir();
     if clean {
-        fsx::sweep_abandoned_temps(&dir);
+        fsx::clear_abandoned(&dir);
     }
     if let Ok(rd) = std::fs::read_dir(&dir) {
         for entry in rd.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            let path = entry.path();
-            if name.starts_with('.') && name.contains(".tmp-") {
+            if fsx::is_old_lock(&name) || fsx::is_os_file(&name) {
+                continue;
+            }
+            if fsx::is_work_file(&name) {
                 strays.push(name);
-                continue;
-            }
-            if name.starts_with('.') && name.ends_with(".md.lock") {
-                if clean {
-                    fsx::break_abandoned_lock(&path);
-                }
-                continue;
-            }
-            if fsx::is_work_file(&name) || fsx::is_os_file(&name) {
                 continue;
             }
             let slug = name.strip_suffix(".md");

@@ -1,6 +1,7 @@
 //! File helpers: atomic writes with cleanup, strict reads, path guards.
 
-use std::fs::{self, OpenOptions};
+use crate::oslock::FileLock;
+use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,200 +23,61 @@ impl Drop for TempGuard {
     }
 }
 
-const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
-const LOCK_OWN_PID: u64 = 30;
-const LOCK_GRACE: u64 = 1;
-const TEMP_ABANDON: u64 = 30;
-/// A file time a couple of seconds ahead is clock skew, not a lock planted
-/// in the future. Farther than this, and no live pid, the lock is not held.
-const CLOCK_SKEW: std::time::Duration = std::time::Duration::from_secs(2);
+/// How long an attach waits for another attach to the same claim.
+pub const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
-struct HeldLock {
-    path: PathBuf,
-    /// The line this holder wrote. The name is removed only while it still
-    /// holds this line, so a lock another writer took over is left alone.
-    text: String,
-}
+/// How old a temp file must be before it is taken as abandoned. A write holds
+/// its temp for one write, sync and rename: milliseconds. A writer paused past
+/// this (a laptop asleep mid-write) loses only that write: its rename or link
+/// then fails with an error and nothing else changes, because each temp name
+/// holds the writer's pid and a counter and is never reused.
+pub const TEMP_STALE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
-impl Drop for HeldLock {
-    fn drop(&mut self) {
-        if fs::read_to_string(&self.path).is_ok_and(|t| t == self.text) {
-            let _ = fs::remove_file(&self.path);
-        }
-    }
-}
-
-/// How long a `.break` guard may stay before it counts as abandoned.
-/// Breaking takes microseconds; only a writer killed mid-break leaves one.
-const BREAK_STALE: u64 = 5;
-
-/// Remove `lock` when no live writer holds it, and say whether it was removed.
-/// Only the holder of the `.break` guard beside it removes, after judging the
-/// lock again while holding the guard. The lock name cannot be created while
-/// the old file is there, so the file judged abandoned is the file removed: a
-/// lock taken a moment after another contender's check is never deleted.
-pub fn break_abandoned_lock(lock: &Path) -> bool {
-    if !lock.exists() || lock_held(lock) {
-        return false;
-    }
-    let mut guard = lock.as_os_str().to_owned();
-    guard.push(".break");
-    let guard = PathBuf::from(guard);
-    let held = match OpenOptions::new().write(true).create_new(true).open(&guard) {
-        Ok(file) => file,
-        Err(_) => {
-            if matches!(file_age(&guard), Age::Secs(secs) if secs > BREAK_STALE) {
-                let _ = fs::remove_file(&guard);
-            }
-            return false;
-        }
-    };
-    let removed = lock.exists() && !lock_held(lock) && fs::remove_file(lock).is_ok();
-    drop(held);
-    let _ = fs::remove_file(&guard);
-    removed
-}
-
-/// Hold an exclusive lock file for a read-modify-write.
-///
-/// The lock is an atomic `create_new`. The file's first line is this process
-/// id. A lock whose pid is not running is removed at once, as is a lock with
-/// no pid once it is a second old, and a lock whose mtime is in the future
-/// when no live pid holds it. A live pid is left alone: after 5 seconds this
-/// returns an error and does not run `body`.
+/// Hold the operating-system lock at `lock` for a read-modify-write, then run
+/// `body`. The kernel releases the lock when this process exits or is killed,
+/// so there is no stale lock to judge. A busy lock is retried with a sleep of
+/// 1 to 10 ms for up to `LOCK_WAIT`; after that this returns an error and does
+/// not run `body`. The lock file stays: lock files are never deleted.
 pub fn with_claim_lock<T>(
     lock: &Path,
     body: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
-    if let Some(dir) = lock.parent() {
-        sweep_abandoned_temps(dir);
-    }
     let started = std::time::Instant::now();
-    loop {
-        match OpenOptions::new().write(true).create_new(true).open(lock) {
-            Ok(mut file) => {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default();
-                let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-                let text = format!(
-                    "{} {} {:x}-{n}\n",
-                    std::process::id(),
-                    now.as_secs(),
-                    now.as_nanos()
+    let mut pause = std::time::Duration::from_millis(1);
+    let held = loop {
+        match FileLock::try_acquire(lock).map_err(|e| format!("cannot lock the claim: {e}"))? {
+            Some(held) => break held,
+            None if started.elapsed() >= LOCK_WAIT => {
+                return Err(
+                    "this claim is being updated by another attach. Retry adsertio_attach; nothing was written."
+                        .into(),
                 );
-                let _ = file.write_all(text.as_bytes());
-                let _ = file.sync_all();
-                let held = HeldLock {
-                    path: lock.to_path_buf(),
-                    text,
-                };
-                let result = body();
-                drop(held);
-                return result;
             }
-            Err(error) if lock_contended(&error) => {
-                if break_abandoned_lock(lock) {
-                    continue;
-                }
-                if started.elapsed() >= LOCK_WAIT {
-                    return Err(
-                        "this claim is being updated by another attach. Retry adsertio_attach; nothing was written."
-                            .into(),
-                    );
-                }
-                std::thread::sleep(std::time::Duration::from_millis(20));
+            None => {
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(std::time::Duration::from_millis(10));
             }
-            Err(error) => return Err(format!("cannot lock the claim: {error}")),
         }
-    }
-}
-
-/// `true` when creating the lock failed because another attach holds it, or
-/// is releasing it. Windows returns access denied (5) or a sharing violation
-/// (32) while another process deletes the name, so those mean "try again"
-/// there. On Unix, permission denied is a real error (a read-only folder).
-fn lock_contended(err: &std::io::Error) -> bool {
-    err.kind() == std::io::ErrorKind::AlreadyExists
-        || (cfg!(windows)
-            && (err.kind() == std::io::ErrorKind::PermissionDenied
-                || matches!(err.raw_os_error(), Some(5) | Some(32))))
-}
-
-/// `true` when a live process still holds `lock`. A missing file is not held.
-pub fn lock_held(lock: &Path) -> bool {
-    let age = file_age(lock);
-    if matches!(age, Age::Missing) {
-        return false;
-    }
-    let text = fs::read_to_string(lock).unwrap_or_default();
-    match crate::proc::leading_pid(&text) {
-        Some(pid) if crate::proc::pid_alive(pid) => {
-            pid != std::process::id() || !own_pid_is_leftover(&age)
-        }
-        Some(_) => false,
-        // No pid yet: the holder may still be writing the line. A mtime a
-        // moment ahead is the same window. An hour ahead is not.
-        None => within_grace(&age),
-    }
-}
-
-fn within_grace(age: &Age) -> bool {
-    match age {
-        Age::Secs(secs) => *secs < LOCK_GRACE,
-        Age::Future(ahead) => *ahead < CLOCK_SKEW,
-        Age::Missing => false,
-    }
-}
-
-/// This process is not inside the lock. A file that names us and is old, or
-/// far in the future, is a reused pid or a planted time.
-fn own_pid_is_leftover(age: &Age) -> bool {
-    match age {
-        Age::Secs(secs) => *secs >= LOCK_OWN_PID,
-        Age::Future(ahead) => *ahead >= CLOCK_SKEW,
-        Age::Missing => true,
-    }
-}
-
-/// `true` when `lock` should be removed rather than waited on.
-pub fn lock_file_is_stale(lock: &Path) -> bool {
-    lock.exists() && !lock_held(lock)
-}
-
-/// Delete temp files in `dir` whose writer is gone. A temp whose name does
-/// not carry a pid is removed once it is 30 seconds old, or at once when its
-/// mtime is in the future. A live writer's temp is left in place.
-pub fn sweep_abandoned_temps(dir: &Path) {
-    let Ok(rd) = fs::read_dir(dir) else {
-        return;
     };
-    for entry in rd.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !(name.starts_with('.') && name.contains(".tmp-")) {
-            continue;
-        }
-        if temp_abandoned(entry.path().as_path(), &name) {
-            let _ = fs::remove_file(entry.path());
+    let result = body();
+    drop(held);
+    result
+}
+
+/// Delete temp files in `dir` older than `TEMP_STALE`. Nothing else is
+/// touched: a younger temp may belong to a writer still running.
+pub fn sweep_abandoned_temps(dir: &Path) {
+    for (name, abandoned) in work_files(dir) {
+        if abandoned && is_temp(&name) {
+            let _ = fs::remove_file(dir.join(name));
         }
     }
 }
 
-fn temp_abandoned(path: &Path, name: &str) -> bool {
-    if let Some(pid) = temp_pid(name) {
-        return !crate::proc::pid_alive(pid);
-    }
-    match file_age(path) {
-        Age::Future(ahead) if ahead >= CLOCK_SKEW => true,
-        Age::Secs(secs) if secs >= TEMP_ABANDON => true,
-        _ => false,
-    }
-}
-
-/// Adsertio's own work files in `dir` (temp files, attach locks, break
-/// guards), each with `true` when its writer is gone and it may be removed.
-/// Reads only.
+/// Adsertio's own work files in `dir` (temp files, and the attach locks and
+/// break guards 1.3 and earlier left there), each with `true` when it may be
+/// removed: a temp older than `TEMP_STALE`, or any old-style lock file, which
+/// nothing uses since 1.4. Reads only.
 pub fn work_files(dir: &Path) -> Vec<(String, bool)> {
     let Ok(rd) = fs::read_dir(dir) else {
         return Vec::new();
@@ -226,95 +88,61 @@ pub fn work_files(dir: &Path) -> Vec<(String, bool)> {
         if !is_work_file(&name) {
             continue;
         }
-        let path = entry.path();
-        let abandoned = if name.ends_with(".md.lock.break") {
-            matches!(file_age(&path), Age::Secs(secs) if secs > BREAK_STALE)
-        } else if name.ends_with(".md.lock") {
-            lock_file_is_stale(&path)
-        } else {
-            temp_abandoned(&path, &name)
-        };
+        if entry.file_type().is_ok_and(|t| !t.is_file()) {
+            continue;
+        }
+        let abandoned = is_old_lock(&name) || aged(&entry.path(), TEMP_STALE);
         out.push((name, abandoned));
     }
     out.sort();
     out
 }
 
-/// Remove the work files in `dir` whose writer is gone, the same way `check`
-/// does, and return the names removed. A live writer's files are left alone.
+/// Remove the work files in `dir` that `work_files` marks removable (old
+/// temps and old-style lock files), as `check` does, and return the names
+/// removed. A temp younger than `TEMP_STALE` is left alone.
 pub fn clear_abandoned(dir: &Path) -> Vec<String> {
-    let before = work_files(dir);
-    sweep_abandoned_temps(dir);
-    for (name, abandoned) in &before {
-        if !abandoned {
-            continue;
-        }
-        if name.ends_with(".md.lock") {
-            break_abandoned_lock(&dir.join(name));
-        } else if name.ends_with(".md.lock.break") {
-            let _ = fs::remove_file(dir.join(name));
-        }
-    }
-    before
+    work_files(dir)
         .into_iter()
-        .filter(|(name, abandoned)| *abandoned && !dir.join(name).exists())
+        .filter(|(name, abandoned)| *abandoned && fs::remove_file(dir.join(name)).is_ok())
         .map(|(name, _)| name)
         .collect()
 }
 
-/// A file Adsertio itself leaves in the claims folder for a moment: a temp
-/// file (`.<name>.tmp-<pid>-<n>`), an attach lock (`.<id>.md.lock`), or the
-/// guard taken to break a dead lock (`.<id>.md.lock.break`). Any other name
-/// that is not `<id>.md`, dotfiles included, is not a claim file.
 /// Files the operating system drops into any folder (macOS Finder's
 /// `.DS_Store`). They are not claims and not strays: every command ignores them.
 pub fn is_os_file(name: &str) -> bool {
     name == ".DS_Store"
 }
 
+/// A file Adsertio itself leaves in the claims folder: a temp file
+/// (`.<name>.tmp-<pid>-<n>`) for a moment, or a lock file from 1.3 and
+/// earlier (`.<id>.md.lock`, `.<id>.md.lock.break`). Any other name that is
+/// not `<id>.md`, dotfiles included, is not a claim file.
 pub fn is_work_file(name: &str) -> bool {
+    is_temp(name) || is_old_lock(name)
+}
+
+fn is_temp(name: &str) -> bool {
+    name.starts_with('.') && name.contains(".tmp-")
+}
+
+/// An attach lock or break guard from 1.3 and earlier. 1.4 never uses these
+/// names, so one always blocks nothing and may be removed.
+pub fn is_old_lock(name: &str) -> bool {
     name.starts_with('.')
-        && (name.contains(".tmp-")
-            || name.ends_with(".md.lock")
-            || name.ends_with(".md.lock.break"))
+        && !is_temp(name)
+        && (name.ends_with(".md.lock") || name.ends_with(".md.lock.break"))
 }
 
-/// `.{file}.tmp-{pid}-{n}` -> pid.
-fn temp_pid(name: &str) -> Option<u32> {
-    let rest = name.rsplit_once(".tmp-")?.1;
-    let (pid, n) = rest.rsplit_once('-')?;
-    if pid.is_empty() || !pid.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let pid: u32 = pid.parse().ok()?;
-    if pid == 0 {
-        None
-    } else {
-        Some(pid)
-    }
-}
-
-enum Age {
-    Missing,
-    /// How far the mtime is ahead of now.
-    Future(std::time::Duration),
-    Secs(u64),
-}
-
-fn file_age(path: &Path) -> Age {
-    let Ok(meta) = fs::metadata(path) else {
-        return Age::Missing;
-    };
-    match meta.modified() {
-        Ok(when) => match when.elapsed() {
-            Ok(age) => Age::Secs(age.as_secs()),
-            Err(error) => Age::Future(error.duration()),
-        },
-        Err(_) => Age::Future(CLOCK_SKEW),
-    }
+/// `true` when `path`'s mtime is more than `limit` in the past. A mtime in the
+/// future is not old.
+fn aged(path: &Path, limit: std::time::Duration) -> bool {
+    fs::symlink_metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age > limit)
 }
 
 /// Replace `dest` with `tmp`. On Windows a just-closed file can refuse the
@@ -565,40 +393,93 @@ mod tests {
     use super::*;
 
     #[test]
-    fn racing_past_a_dead_attach_lock_leaves_one_holder() {
+    fn one_attach_holds_a_claim_lock_at_a_time_and_the_file_stays() {
         use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
-        let d = std::env::temp_dir().join(format!("adsertio-fsx-dead-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        let lock = d.join(".c.md.lock");
-        for _ in 0..12 {
-            fs::write(&lock, "999999 0\n").unwrap();
-            let inside = std::sync::Arc::new(AtomicU64::new(0));
-            let most = std::sync::Arc::new(AtomicU64::new(0));
-            let gate = std::sync::Arc::new(std::sync::Barrier::new(6));
-            let handles: Vec<_> = (0..6)
-                .map(|_| {
-                    let (lock, inside, most, gate) =
-                        (lock.clone(), inside.clone(), most.clone(), gate.clone());
-                    std::thread::spawn(move || {
-                        gate.wait();
-                        with_claim_lock(&lock, || {
-                            most.fetch_max(inside.fetch_add(1, SeqCst) + 1, SeqCst);
-                            std::thread::sleep(std::time::Duration::from_millis(30));
-                            inside.fetch_sub(1, SeqCst);
-                            Ok(())
-                        })
-                        .unwrap();
+        let d = scratch("claim-lock");
+        let lock = d.join("c.lock");
+        // Left by an older writer: the contents mean nothing now.
+        fs::write(&lock, "999999 0\n").unwrap();
+        let inside = std::sync::Arc::new(AtomicU64::new(0));
+        let most = std::sync::Arc::new(AtomicU64::new(0));
+        let gate = std::sync::Arc::new(std::sync::Barrier::new(6));
+        let handles: Vec<_> = (0..6)
+            .map(|_| {
+                let (lock, inside, most, gate) =
+                    (lock.clone(), inside.clone(), most.clone(), gate.clone());
+                std::thread::spawn(move || {
+                    gate.wait();
+                    with_claim_lock(&lock, || {
+                        most.fetch_max(inside.fetch_add(1, SeqCst) + 1, SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(30));
+                        inside.fetch_sub(1, SeqCst);
+                        Ok(())
                     })
+                    .unwrap();
                 })
-                .collect();
-            for handle in handles {
-                handle.join().unwrap();
-            }
-            assert_eq!(most.load(SeqCst), 1, "two attach holders at once");
-            assert!(!lock.exists());
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
         }
-        let _ = fs::remove_dir_all(&d);
+        assert_eq!(most.load(SeqCst), 1, "two attach holders at once");
+        assert!(lock.is_file(), "a lock file is never deleted");
+    }
+
+    #[test]
+    fn a_busy_claim_lock_gives_up_with_nothing_written() {
+        let d = scratch("claim-busy");
+        let lock = d.join("c.lock");
+        let _held = FileLock::try_acquire(&lock).unwrap().unwrap();
+        let started = std::time::Instant::now();
+        let err = with_claim_lock(&lock, || -> Result<(), String> {
+            panic!("ran the body while the lock was held")
+        })
+        .unwrap_err();
+        assert!(started.elapsed() >= LOCK_WAIT);
+        assert!(
+            err.contains("another attach") && err.contains("nothing was written"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn temps_are_judged_by_age_and_old_locks_are_always_removable() {
+        let d = scratch("work-files");
+        let set_age = |name: &str, secs: u64| {
+            let path = d.join(name);
+            fs::write(&path, b"x").unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(secs))
+                .unwrap();
+        };
+        set_age(".a.md.tmp-1-1", 2 * 60 * 60);
+        set_age(".b.md.tmp-999999-1", 120);
+        set_age(".c.md.lock", 0);
+        set_age(".c.md.lock.break", 0);
+        set_age("c.md", 2 * 60 * 60);
+        let files = work_files(&d);
+        assert_eq!(
+            files,
+            [
+                (".a.md.tmp-1-1".to_string(), true),
+                (".b.md.tmp-999999-1".to_string(), false),
+                (".c.md.lock".to_string(), true),
+                (".c.md.lock.break".to_string(), true),
+            ]
+        );
+        sweep_abandoned_temps(&d);
+        assert!(!d.join(".a.md.tmp-1-1").exists());
+        assert!(
+            d.join(".c.md.lock").exists(),
+            "the sweep removes temps only"
+        );
+        let removed = clear_abandoned(&d);
+        assert_eq!(removed, [".c.md.lock", ".c.md.lock.break"]);
+        assert!(d.join(".b.md.tmp-999999-1").exists());
+        assert!(d.join("c.md").exists());
     }
 
     fn scratch(name: &str) -> PathBuf {

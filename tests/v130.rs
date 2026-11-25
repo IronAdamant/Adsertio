@@ -685,14 +685,6 @@ fn doctor_passes_on_a_healthy_store() {
     assert!(is_error(&reply[0]), "{}", reply[0]);
 }
 
-/// A pid that is not running: a child that has already exited.
-fn dead_pid() -> u32 {
-    let mut child = Command::new(CLI).arg("--version").spawn().unwrap();
-    let pid = child.id();
-    child.wait().unwrap();
-    pid
-}
-
 #[test]
 fn doctor_reports_planted_problems_with_a_fix() {
     let dir = repo("v130-doctor-bad");
@@ -715,11 +707,21 @@ fn doctor_reports_planted_problems_with_a_fix() {
     fs::remove_file(claims.join("broken.md")).unwrap();
     fs::remove_file(dir.join(".trammel/store")).unwrap();
 
-    // Leftovers from a writer that is gone: reported, then cleared by --fix.
-    let pid = dead_pid();
-    let temp = format!(".x.md.tmp-{pid}-1");
+    // Leftovers: a temp over an hour old and a 1.3 attach lock naming a live
+    // pid (this one). Reported, then cleared by --fix.
+    let temp = format!(".x.md.tmp-{}-1", std::process::id());
     fs::write(claims.join(&temp), "partial").unwrap();
-    fs::write(claims.join(".x.md.lock"), format!("{pid} 0 0-0\n")).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(claims.join(&temp))
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 60 * 60))
+        .unwrap();
+    fs::write(
+        claims.join(".x.md.lock"),
+        format!("{} 0 0-0\n", std::process::id()),
+    )
+    .unwrap();
     let (code, doc) = doctor(&dir, &[]);
     assert_eq!(code, 1, "{}", doc.to_json());
     let left = check(&doc, "leftover_files");

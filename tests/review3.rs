@@ -2,7 +2,6 @@
 mod common;
 use common::*;
 use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime};
 
 fn claim_file(summary: &str, created: &str, evidence: &str) -> String {
     format!(
@@ -311,7 +310,7 @@ fn parallel_claims_with_the_same_summary_all_get_ids() {
 }
 
 #[test]
-fn check_reports_a_stale_attach_lock() {
+fn check_removes_an_attach_lock_left_by_1_3() {
     let dir = project("stale-check");
     init(&dir);
     std::fs::write(
@@ -319,14 +318,9 @@ fn check_reports_a_stale_attach_lock() {
         claim_file("Held", "2020-01-01T00:00:00Z", ""),
     )
     .unwrap();
+    // 1.3 wrote the holder pid. A live one (this process) blocks nothing now.
     let lock = dir.join(".adsertio/claims/.held.md.lock");
-    std::fs::write(&lock, "dead\n").unwrap();
-    std::fs::File::options()
-        .write(true)
-        .open(&lock)
-        .unwrap()
-        .set_modified(SystemTime::now() - Duration::from_secs(120))
-        .unwrap();
+    std::fs::write(&lock, format!("{} 0 0-0\n", std::process::id())).unwrap();
     let checked = Command::new(CLI)
         .arg("check")
         .current_dir(&dir)
@@ -337,7 +331,7 @@ fn check_reports_a_stale_attach_lock() {
         "{}",
         String::from_utf8_lossy(&checked.stderr)
     );
-    assert!(!lock.exists(), "a dead lock is removed by check");
+    assert!(!lock.exists(), "a 1.3 lock is removed by check");
 }
 
 #[test]

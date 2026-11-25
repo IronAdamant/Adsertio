@@ -6,6 +6,7 @@
 //! ```text
 //! .adsertio/
 //!   claims/<id>.md        one claim per file
+//!   locks/<id>.lock       the attach lock for that claim, kept
 //! ```
 
 use crate::fsx;
@@ -87,6 +88,33 @@ impl Store {
 
     pub fn claims_dir(&self) -> PathBuf {
         self.dir.join("claims")
+    }
+
+    /// `.adsertio/locks/`, where the attach lock files live.
+    pub fn locks_dir(&self) -> PathBuf {
+        self.dir.join("locks")
+    }
+
+    /// The attach lock file for claim `id` (a slug already checked by
+    /// `fsx::join_id`), with `locks/` created when missing. A symlinked
+    /// `locks` folder is refused. The file is created by the first attach to
+    /// that claim and never deleted, so there is at most one per claim.
+    pub fn attach_lock(&self, id: &str) -> Result<PathBuf, String> {
+        let dir = self.locks_dir();
+        match fs::symlink_metadata(&dir) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(".adsertio/locks is a symlink; refusing to follow it. Remove it; attach makes a real folder.".into());
+            }
+            Ok(meta) if !meta.is_dir() => {
+                return Err(
+                    ".adsertio/locks is not a folder. Remove it; attach makes a real folder."
+                        .into(),
+                );
+            }
+            Ok(_) => {}
+            Err(_) => fsx::make_private_dir(&dir)?,
+        }
+        Ok(dir.join(format!("{id}.lock")))
     }
 }
 
