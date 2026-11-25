@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.1
+
+- `adsertio view --if-store` (CLI only) prints nothing and exits 0 when no
+  `.adsertio` folder is found, so a session hook set for every project stays
+  quiet where Adsertio is not used. With ADSERTIO_DIR set, a missing store is
+  still an error. `adsertio hook` now adds it.
+
 ## 1.3.0
 
 Same claim format as 1.2.2. This release cuts agent turns: each MCP call is
@@ -24,7 +31,7 @@ Added:
 - The tool descriptions, the server instructions, and `adsertio_guide` tell
   an agent to record all claims in one call.
 - `adsertio hook --host claude|cursor|generic` prints a hook that runs
-  `adsertio view --compact --states unverified --states refuted --limit 50`
+  `adsertio view --compact --states unverified --states refuted --limit 50 --if-store`
   at session start and after compaction, so the agent sees the claims that are not
   verified instead of repeating verdicts from memory. The Claude Code
   snippet uses the exec form (`command` plus `args`, no shell), so it runs

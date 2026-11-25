@@ -320,11 +320,14 @@ flag, or an unknown host, is a usage error. Adsertio does not install the
 snippet. Every snippet runs
 
 ```
-adsertio view --compact --states unverified --states refuted --limit 50
+adsertio view --compact --states unverified --states refuted --limit 50 --if-store
 ```
 
 which lists only the claims that are not verified, so after compaction the
-agent reads them again instead of repeating a verdict from memory. The
+agent reads them again instead of repeating a verdict from memory.
+`--if-store` (command line only) prints nothing and exits 0 when no
+`.adsertio` folder is found and ADSERTIO_DIR is unset, so the hook can sit
+in user settings for every project. The
 command has no shell syntax (no `&&`, `||`, quotes, `~`, or variables).
 
 - `claude`: JSON for `.claude/settings.json`. A `SessionStart` entry with

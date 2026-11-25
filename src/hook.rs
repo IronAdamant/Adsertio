@@ -32,6 +32,7 @@ pub const VIEW_ARGS: &[&str] = &[
     "refuted",
     "--limit",
     "50",
+    "--if-store",
 ];
 
 /// The `--wrap` values `adsertio view` takes, for hosts that want JSON.

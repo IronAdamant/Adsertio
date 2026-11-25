@@ -443,7 +443,8 @@ fn the_claude_hook_is_valid_json_with_an_exec_command() {
             "--states",
             "refuted",
             "--limit",
-            "50"
+            "50",
+            "--if-store"
         ]
     );
     for arg in &args {
@@ -489,14 +490,14 @@ fn the_cursor_and_generic_hooks_name_the_view() {
         .to_string();
     assert_eq!(
         command,
-        "adsertio view --compact --states unverified --states refuted --limit 50 --wrap cursor"
+        "adsertio view --compact --states unverified --states refuted --limit 50 --if-store --wrap cursor"
     );
     no_shell_syntax(&command);
 
     let generic = text(&cli(&dir, &["hook"]));
     assert!(
         generic.contains(
-            "\nadsertio view --compact --states unverified --states refuted --limit 50\n"
+            "\nadsertio view --compact --states unverified --states refuted --limit 50 --if-store\n"
         ),
         "{generic}"
     );
@@ -877,4 +878,35 @@ fn readme_and_spec_describe_1_3_0() {
     for text in [readme, spec, log] {
         assert!(text.is_ascii(), "docs are plain ASCII");
     }
+}
+
+// A hook set for every project must stay quiet where there is no store.
+#[test]
+fn view_if_store_is_silent_without_a_store() {
+    let dir = project("v130-if-store");
+    let out = std::process::Command::new(CLI)
+        .args(["view", "--compact", "--if-store"])
+        .current_dir(&dir)
+        .env_remove("ADSERTIO_DIR")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty() && out.stderr.is_empty());
+    // Without the flag it is still an error.
+    let out = std::process::Command::new(CLI)
+        .args(["view", "--compact"])
+        .current_dir(&dir)
+        .env_remove("ADSERTIO_DIR")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    // With a store it prints the view as usual.
+    init(&dir);
+    let out = std::process::Command::new(CLI)
+        .args(["view", "--compact", "--if-store"])
+        .current_dir(&dir)
+        .env_remove("ADSERTIO_DIR")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("\"claims\""));
 }

@@ -18,7 +18,7 @@ USAGE
   adsertio claim --summary S [--evidence tool:path[#selector]]... [--author A] [--body B] [--id I] [--tags T]...
   adsertio attach --items JSON | --items-file PATH     several claims at once
   adsertio attach --id I --evidence tool:path[#selector]...
-  adsertio view [--id I] [--verdict verified|refuted|unverified] [--states S]... [--compact] [--limit N] [--offset N] [--after CURSOR] [--wrap cursor|claude-subagent]
+  adsertio view [--id I] [--verdict verified|refuted|unverified] [--states S]... [--compact] [--limit N] [--offset N] [--after CURSOR] [--wrap cursor|claude-subagent] [--if-store]
   adsertio ls [--limit N] [--offset N]
   adsertio guide
   adsertio check                      read every claim; fail on any damage
@@ -115,14 +115,27 @@ fn run_tool(tool: &Tool, argv: &[String]) -> Result<Result<Value, String>, i32> 
     }
 }
 
-/// `view`, plus the command-line-only `--wrap cursor|claude-subagent`, which
-/// prints the view inside the JSON a host hook reads.
+/// `view`, plus two command-line-only flags for hooks: `--wrap
+/// cursor|claude-subagent` prints the view inside the JSON a host hook reads,
+/// and `--if-store` prints nothing and exits 0 when no `.adsertio` folder is
+/// found (so a hook set for every project stays quiet where Adsertio is not
+/// used). With ADSERTIO_DIR set, a missing store is still an error.
 fn view(argv: &[String]) -> i32 {
     let mut rest = Vec::new();
     let mut wrap: Option<String> = None;
+    let mut if_store = false;
     let mut i = 0;
     while i < argv.len() {
         let word = &argv[i];
+        if word == "--if-store" {
+            if if_store {
+                eprintln!("--if-store given twice");
+                return 2;
+            }
+            if_store = true;
+            i += 1;
+            continue;
+        }
         let value = if word == "--wrap" {
             i += 1;
             match argv.get(i) {
@@ -151,6 +164,12 @@ fn view(argv: &[String]) -> i32 {
             None => rest.push(word.clone()),
         }
         i += 1;
+    }
+    if if_store
+        && std::env::var_os("ADSERTIO_DIR").is_none()
+        && crate::store::Store::open().is_err()
+    {
+        return 0;
     }
     let out = match run_tool(tool("adsertio_view"), &rest) {
         Ok(out) => out,

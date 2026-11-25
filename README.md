@@ -205,10 +205,10 @@ Each MCP call is one agent turn, and every turn reads the whole conversation aga
 When a conversation is compacted, an agent can remember a verdict that is no longer true. `adsertio hook` prints a hook that runs, at session start and after compaction:
 
 ```sh
-adsertio view --compact --states unverified --states refuted --limit 50
+adsertio view --compact --states unverified --states refuted --limit 50 --if-store
 ```
 
-so the agent sees the claims that are not verified and reads them again instead of repeating a verdict from memory.
+so the agent sees the claims that are not verified and reads them again instead of repeating a verdict from memory. `--if-store` makes it print nothing (and exit 0) in a project with no `.adsertio` folder, so the hook can go in your user settings and stay quiet where Adsertio is not used.
 
 - `--host claude` prints JSON for `.claude/settings.json`: a `SessionStart` hook whose matcher is `startup|resume|clear|compact`, and a `SubagentStart` hook that gives a sub-agent the same list. It uses the exec form (`"command": "adsertio"` with an `args` list), which starts the program with no shell, so it works the same on Windows, macOS and Linux.
 - `--host cursor` prints JSON for `.cursor/hooks.json`. Its command adds `--wrap cursor`, which prints the view inside the `additional_context` JSON Cursor reads. Cursor's `preCompact` cannot put text back, so after compaction run the view again yourself.
