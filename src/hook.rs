@@ -20,7 +20,9 @@ const PARAMS: &[Param] = &[Param {
     choices: &[],
 }];
 
-/// The view the hook runs: open claims only, without per-pointer detail.
+/// The view the hook runs: open claims only, without per-pointer detail, and
+/// at most 50 of them so a big store cannot flood the session (the reply's
+/// hint names the next page).
 pub const VIEW_ARGS: &[&str] = &[
     "view",
     "--compact",
@@ -28,6 +30,8 @@ pub const VIEW_ARGS: &[&str] = &[
     "unverified",
     "--states",
     "refuted",
+    "--limit",
+    "50",
 ];
 
 /// The `--wrap` values `adsertio view` takes, for hosts that want JSON.

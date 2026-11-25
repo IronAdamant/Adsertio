@@ -320,7 +320,7 @@ flag, or an unknown host, is a usage error. Adsertio does not install the
 snippet. Every snippet runs
 
 ```
-adsertio view --compact --states unverified --states refuted
+adsertio view --compact --states unverified --states refuted --limit 50
 ```
 
 which lists only the claims that are not verified, so after compaction the

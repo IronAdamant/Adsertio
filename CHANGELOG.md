@@ -24,8 +24,8 @@ Added:
 - The tool descriptions, the server instructions, and `adsertio_guide` tell
   an agent to record all claims in one call.
 - `adsertio hook --host claude|cursor|generic` prints a hook that runs
-  `adsertio view --compact --states unverified --states refuted` at session
-  start and after compaction, so the agent sees the claims that are not
+  `adsertio view --compact --states unverified --states refuted --limit 50`
+  at session start and after compaction, so the agent sees the claims that are not
   verified instead of repeating verdicts from memory. The Claude Code
   snippet uses the exec form (`command` plus `args`, no shell), so it runs
   the same on Windows, and adds a `SubagentStart` entry for sub-agents.

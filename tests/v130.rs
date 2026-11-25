@@ -441,7 +441,9 @@ fn the_claude_hook_is_valid_json_with_an_exec_command() {
             "--states",
             "unverified",
             "--states",
-            "refuted"
+            "refuted",
+            "--limit",
+            "50"
         ]
     );
     for arg in &args {
@@ -487,13 +489,15 @@ fn the_cursor_and_generic_hooks_name_the_view() {
         .to_string();
     assert_eq!(
         command,
-        "adsertio view --compact --states unverified --states refuted --wrap cursor"
+        "adsertio view --compact --states unverified --states refuted --limit 50 --wrap cursor"
     );
     no_shell_syntax(&command);
 
     let generic = text(&cli(&dir, &["hook"]));
     assert!(
-        generic.contains("\nadsertio view --compact --states unverified --states refuted\n"),
+        generic.contains(
+            "\nadsertio view --compact --states unverified --states refuted --limit 50\n"
+        ),
         "{generic}"
     );
     assert!(generic.contains("after compaction"), "{generic}");

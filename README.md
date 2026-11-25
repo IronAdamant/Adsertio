@@ -205,7 +205,7 @@ Each MCP call is one agent turn, and every turn reads the whole conversation aga
 When a conversation is compacted, an agent can remember a verdict that is no longer true. `adsertio hook` prints a hook that runs, at session start and after compaction:
 
 ```sh
-adsertio view --compact --states unverified --states refuted
+adsertio view --compact --states unverified --states refuted --limit 50
 ```
 
 so the agent sees the claims that are not verified and reads them again instead of repeating a verdict from memory.
