@@ -80,8 +80,11 @@ fn a_capped_probatio_diff_run_is_inconclusive() {
         dir.join(".probatio/diff/run/run.json"),
         format!(
             "{{\"package\":\".\",\"patches\":[\"{}\"],\"out\":\"{}\"}}",
-            generate.display(),
-            dir.join(".probatio/diff/run").display()
+            generate.display().to_string().replace('\\', "\\\\"),
+            dir.join(".probatio/diff/run")
+                .display()
+                .to_string()
+                .replace('\\', "\\\\")
         ),
     )
     .unwrap();
@@ -181,7 +184,11 @@ fn a_run_whose_list_cannot_be_checked_is_inconclusive() {
         dir.join("out/run.json"),
         format!(
             "{{\"patches\":[\"{}\"]}}",
-            outside.join("mutants.json").display()
+            outside
+                .join("mutants.json")
+                .display()
+                .to_string()
+                .replace('\\', "\\\\")
         ),
     )
     .unwrap();
