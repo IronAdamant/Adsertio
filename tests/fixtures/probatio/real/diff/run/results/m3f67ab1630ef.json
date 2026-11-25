@@ -1,0 +1,19 @@
+{
+  "id": "m3f67ab1630ef",
+  "file": "pkg/calc.py",
+  "line": 8,
+  "outcome": "killed",
+  "selectedCount": 1,
+  "selectionCapped": false,
+  "durationMs": 50,
+  "timedOut": false,
+  "tests": [
+    "tests.test_calc.T.test_big"
+  ],
+  "command": "python3 /project/.probatio/diff/run/reporter.py tests.test_calc.T.test_big",
+  "direction": "forward",
+  "mutantHash": "12aa6cd20a10ab5e8c2cc58427c47754e8f25e00f29795987db55631b1b16b73",
+  "killedBy": [
+    "tests/test_calc.py::tests.test_calc.T.test_big"
+  ]
+}

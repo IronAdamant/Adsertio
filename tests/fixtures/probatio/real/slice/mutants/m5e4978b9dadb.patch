@@ -1,0 +1,10 @@
+# probatio-mutant direction=forward meaning=apply-to-introduce-the-bug
+--- a/pkg/calc.py
++++ b/pkg/calc.py
+@@ -2,5 +2,5 @@
+     return n > 0
+ 
+ def neg(n):
+-    return n < 0
++    return n <= 0
+ 

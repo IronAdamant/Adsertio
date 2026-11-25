@@ -1,0 +1,11 @@
+{
+  "id": "m5e4978b9dadb",
+  "file": "pkg/calc.py",
+  "line": 5,
+  "outcome": "no coverage",
+  "selectedCount": 0,
+  "selectionCapped": false,
+  "durationMs": 0,
+  "timedOut": false,
+  "tests": []
+}

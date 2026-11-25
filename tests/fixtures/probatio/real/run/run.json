@@ -1,0 +1,10 @@
+{
+  "package": ".",
+  "patches": [
+    ".probatio/slice"
+  ],
+  "out": "/project/.probatio/run",
+  "suiteCommand": "python3 -m unittest discover -s tests",
+  "confirm": true,
+  "workers": 1
+}

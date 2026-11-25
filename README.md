@@ -93,6 +93,8 @@ Other commands:
 - `adsertio check` reads every claim and fails if any is damaged.
 - `adsertio guide` prints a short reminder of pointer shapes and the verdict rule.
 
+Each flag is given once, except `--evidence`, `--tags` and `--states`, which repeat. An unknown or repeated flag is a usage error (exit code 2). A value that starts with `--` goes after `=` (`--summary=--fast`) or after a lone `--` (`--summary -- --fast`).
+
 A claim is a small markdown file in `.adsertio/claims/`:
 
 ```markdown
@@ -122,7 +124,9 @@ A pointer is `tool:path#selector`. The full rules are in [SPEC.md](SPEC.md). In 
 | `probatio:<out>#mutant:<id>` | that one mutant was caught (`killed`) |
 | `probatio:<out>#ledger` | never: an unchecked ledger is not proof |
 
-For Probatio, "finished" means no result is `flaky` or `error`, and, when the run's `run.json` points at a mutant list inside the project, every mutant in that list has a result.
+For Probatio, "finished" means no result is `flaky`, `error`, or `no coverage`, and every mutant in the mutant lists the run's `run.json` names has a result. If Adsertio cannot find or read those lists (no `run.json`, a list outside the project, a deleted patches folder), the run is `inconclusive`, not a pass.
+
+A `probatio mutate diff` run is always `inconclusive`. Probatio does not write down the full list of mutants a diff plans, so a call capped by `--max-mutants` looks the same on disk as a whole one. Point at one mutant (`#mutant:<id>`), or score with `probatio mutate generate` and `probatio mutate run` to get a whole run Adsertio can check.
 
 ### When a pass does not count
 
@@ -142,7 +146,7 @@ The only outside program Adsertio runs is `git rev-parse HEAD`, for the commit c
 | `stale` | It passed, but before the claim, or on a different commit. |
 | `inconclusive` | Read fine, but neither a pass nor a fail (for example, a mutation run with no catch and no survivor). |
 | `unreadable` | Adsertio could not safely read or understand it. |
-| `no_adapter` | Recognised, but deliberately not read (Chisel worktree overlays). |
+| `no_adapter` | Recognised, but deliberately not read (Chisel worktree overlays, and a pointer at one Chisel shard). |
 
 Only `pass` counts towards verified, and only `fail` refutes.
 
@@ -194,9 +198,9 @@ adsertio: tools core
 When something is wrong, Adsertio says so instead of guessing. Each of these is covered by tests in `tests/`:
 
 - **Damaged claims.** A damaged claim stops the whole view and list with an error naming the file. It is never skipped, and the store is never reset.
-- **Files it cannot trust are not proof.** A path that leaves the project, a file over 64 MiB, a file that is not UTF-8, a damaged Trammel or Chisel store, or a broken Probatio result is `unreadable`, never an empty pass. An old SQLite store gets a hint to run `trammel migrate` or `chisel migrate`.
-- **Probatio runs must be finished.** An outcome Probatio does not write is `unreadable`. A `flaky` or `error` result, or a run with results missing, is `inconclusive`.
-- **No hidden Chisel failures.** A pointer at the main Chisel store also reads its shards, however the path is written (`./`, `//`, or through a symlink).
+- **Files it cannot trust are not proof.** A path that leaves the project, a Trammel or Chisel store over 1 GiB (Chisel's own limit), any other evidence file over 64 MiB, a file that is not UTF-8, a damaged Trammel or Chisel store, or a broken Probatio result is `unreadable`, never an empty pass. An old SQLite store gets a hint to run `trammel migrate` or `chisel migrate`.
+- **Probatio runs must be finished.** An outcome Probatio does not write is `unreadable`. A `flaky`, `error` or `no coverage` result, a run with results missing, or a run whose mutant list cannot be checked, is `inconclusive`.
+- **Chisel results come from the main store.** Chisel records test results only in `.chisel/store`. A pointer at it also reads the test edges in every shard, however the path is written (`./`, `//`, or through a symlink), but a shard's own result rows are never used. A pointer into `.chisel/overlays/` is not read, whatever its letter case or however a symlink reaches it.
 - **Safe writes.** Writes land whole through a temp file. A new claim never overwrites another, and attach replaces only its own claim, under a lock. If an attach is killed, exactly one later writer takes over its lock, so concurrent attaches never lose a pointer.
 - **Hands off other tools' files.** Adsertio takes a shared lock when Trammel or Chisel has a lock file, and never creates their locks or deletes their temp files or journals.
 - **A strict server.** Bad JSON, oversized messages and batches get a JSON-RPC error and the server keeps running. Unknown methods and misspelt arguments are errors. A tool that panics is contained.
@@ -211,7 +215,7 @@ When something is wrong, Adsertio says so instead of guessing. Each of these is 
 | `check`, 1,000 claims | 199 s, 153 MiB | 0.34 s, 63 MiB |
 | `view`, 32 claims, one 63 MiB Trammel file | 0.35 s, 191 MiB | 0.13 s, 129 MiB |
 
-A full `view` of all 20,000 claims took 0.50 s. Large evidence files are still read whole, and `--limit 1` still reads every evidence file. The machine, method and full tables are in [docs/perf/1.2.0.md](docs/perf/1.2.0.md).
+A full `view` of all 20,000 claims took 0.50 s. Large evidence files are still read whole (a read holds about the file's size in memory, plus its index), and `--limit 1` still reads every evidence file. The machine, method and full tables are in [docs/perf/1.2.0.md](docs/perf/1.2.0.md).
 
 ## Build and test
 
@@ -224,7 +228,7 @@ cargo build --release --locked
 
 `Cargo.toml` has no dependencies; `tests/zero_deps.rs` checks that, and `Cargo.lock` holds one package.
 
-Pushing a tag named `v*` (for example `v1.2.1`) builds the release archives and `SHA256SUMS` and attaches them to a GitHub release. The v1.0.0 release used shorter archive names, such as `adsertio-linux-x64.tar.gz`.
+Pushing a tag named `v*` (for example `v1.2.2`) builds the release archives and `SHA256SUMS` and attaches them to a GitHub release. The v1.0.0 release used shorter archive names, such as `adsertio-linux-x64.tar.gz`.
 
 ## Licence
 

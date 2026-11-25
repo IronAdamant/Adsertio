@@ -118,6 +118,13 @@ fn a_broken_result_is_unreadable_and_one_mutant_is_judged_alone() {
 fn other_outcomes_do_not_pass_and_a_kill_beside_a_timeout_does() {
     let dir = project("probatio-other");
     fs::create_dir_all(dir.join("out/results")).unwrap();
+    fs::create_dir_all(dir.join("patches")).unwrap();
+    fs::write(
+        dir.join("patches/mutants.json"),
+        r#"{"mutants":[{"id":"m1"},{"id":"m2"}]}"#,
+    )
+    .unwrap();
+    fs::write(dir.join("out/run.json"), r#"{"patches":["patches"]}"#).unwrap();
     fs::write(
         dir.join("out/results/m1.json"),
         r#"{"id":"m1","outcome":"timeout"}"#,

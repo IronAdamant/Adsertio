@@ -202,6 +202,17 @@ fn temp_abandoned(path: &Path, name: &str) -> bool {
     }
 }
 
+/// A file Adsertio itself leaves in the claims folder for a moment: a temp
+/// file (`.<name>.tmp-<pid>-<n>`), an attach lock (`.<id>.md.lock`), or the
+/// guard taken to break a dead lock (`.<id>.md.lock.break`). Any other name
+/// that is not `<id>.md`, dotfiles included, is not a claim file.
+pub fn is_work_file(name: &str) -> bool {
+    name.starts_with('.')
+        && (name.contains(".tmp-")
+            || name.ends_with(".md.lock")
+            || name.ends_with(".md.lock.break"))
+}
+
 /// `.{file}.tmp-{pid}-{n}` -> pid.
 fn temp_pid(name: &str) -> Option<u32> {
     let rest = name.rsplit_once(".tmp-")?.1;

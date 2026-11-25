@@ -34,8 +34,13 @@ fn every_spelling_of_the_chisel_root_store_reads_the_shards() {
         ".chisel/./store",
         ".chisel//store",
     ] {
+        // The root's own pass stands: Chisel records results only in the
+        // root store, so the shard's older-style failure row is not read.
         let e = adsertio::chisel::evaluate(&dir, &format!("chisel:{path}#test:tests/a.rs:t2"));
-        assert_eq!(e.state, State::Fail, "{path}: {}", e.detail);
+        assert_eq!(e.state, State::Pass, "{path}: {}", e.detail);
+        // The shard's edge is read: only it links t2 to src/a.rs.
+        let e = adsertio::chisel::evaluate(&dir, &format!("chisel:{path}#file:src/a.rs"));
+        assert_eq!(e.state, State::Pass, "{path}: {}", e.detail);
     }
 }
 
@@ -44,8 +49,8 @@ fn every_spelling_of_the_chisel_root_store_reads_the_shards() {
 fn a_symlinked_chisel_folder_still_reads_the_shards() {
     let dir = sharded("r4-chisel-link");
     std::os::unix::fs::symlink(dir.join(".chisel"), dir.join("chisel-link")).unwrap();
-    let e = adsertio::chisel::evaluate(&dir, "chisel:chisel-link/store#test:tests/a.rs:t2");
-    assert_eq!(e.state, State::Fail, "{}", e.detail);
+    let e = adsertio::chisel::evaluate(&dir, "chisel:chisel-link/store#file:src/a.rs");
+    assert_eq!(e.state, State::Pass, "{}", e.detail);
 }
 
 #[test]

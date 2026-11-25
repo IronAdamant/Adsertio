@@ -192,29 +192,36 @@ fn shards_are_read_for_the_root_store_only() {
         at(&dir, "test:tests/a.rs:t1").state,
         adsertio::verdict::State::Pass
     );
+    // Chisel records results only in the root store: a shard's own
+    // test_results rows are not read, so these have no result.
     assert_eq!(
         at(&dir, "test:tests/a.rs:t2").state,
-        adsertio::verdict::State::Fail
+        adsertio::verdict::State::Missing
     );
     assert_eq!(
         at(&dir, "test:tests/a.rs:t3").state,
-        adsertio::verdict::State::Pass
+        adsertio::verdict::State::Missing
     );
+    // The shard's edge is read: t2 touches src/a.rs and has no root result.
+    let file = at(&dir, "file:src/a.rs");
     assert_eq!(
-        at(&dir, "file:src/a.rs").state,
-        adsertio::verdict::State::Fail
+        file.state,
+        adsertio::verdict::State::Missing,
+        "{}",
+        file.detail
     );
+    assert!(file.detail.contains("tests/a.rs:t2"), "{}", file.detail);
     let only_shard =
         adsertio::chisel::evaluate(&dir, "chisel:.chisel/shards/net/store#test:tests/a.rs:t1");
     assert_eq!(
         only_shard.state,
-        adsertio::verdict::State::Missing,
+        adsertio::verdict::State::NoAdapter,
         "{}",
         only_shard.detail
     );
     let shard_own =
         adsertio::chisel::evaluate(&dir, "chisel:.chisel/shards/net/store#test:tests/a.rs:t2");
-    assert_eq!(shard_own.state, adsertio::verdict::State::Fail);
+    assert_eq!(shard_own.state, adsertio::verdict::State::NoAdapter);
 
     fs::write(dir.join(".chisel/shards/net/store"), b"{").unwrap();
     let damaged = at(&dir, "test:tests/a.rs:t1");

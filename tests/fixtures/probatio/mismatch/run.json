@@ -1,0 +1,10 @@
+{
+  "package": ".",
+  "patches": [
+    "out/patches"
+  ],
+  "out": "out",
+  "suiteCommand": "cargo test",
+  "confirm": true,
+  "workers": 1
+}

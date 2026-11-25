@@ -218,6 +218,7 @@ pub fn is_after(claim: &Claim, created: &str, id: &str) -> bool {
 }
 
 /// Compare ids with number runs as integers, so `c2` comes before `c10`.
+/// Ids that differ only in leading zeros are ordered by their bytes.
 fn cmp_id(left: &str, right: &str) -> std::cmp::Ordering {
     let left = left.as_bytes();
     let right = right.as_bytes();
@@ -257,7 +258,12 @@ fn cmp_id(left: &str, right: &str) -> std::cmp::Ordering {
             }
         }
     }
-    left.len().cmp(&right.len())
+    // The shorter run of parts sorts first. When the parts are equal
+    // (`a01b1` and `a1b01`), the bytes decide, so different ids never
+    // compare equal and the order is total: a cursor never skips one.
+    let left_more = i < left.len();
+    let right_more = j < right.len();
+    left_more.cmp(&right_more).then_with(|| left.cmp(right))
 }
 
 /// Every claim, oldest first. A damaged claim fails the whole read.
@@ -286,18 +292,24 @@ pub fn load_all(store: &Store) -> Result<Vec<Claim>, String> {
     for e in rd {
         let e = e.map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
         let name = e.file_name().to_string_lossy().to_string();
+        if fsx::is_work_file(&name) {
+            continue; // a write or an attach in flight
+        }
         if name.starts_with('.') {
-            continue; // a write in flight
+            eprintln!(
+                "skipping .adsertio/claims/{name}: not a claim file. adsertio check reports it."
+            );
+            continue;
         }
         let path = e.path();
         let ft = e
             .file_type()
             .map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
         if ft.is_symlink() {
-            return Err(format!(
-                "{} is a symlink; refusing to follow it",
-                path.display()
-            ));
+            eprintln!(
+                "skipping .adsertio/claims/{name}: a symlink is not followed. adsertio check reports it."
+            );
+            continue;
         }
         let Some(id) = name.strip_suffix(".md").filter(|_| ft.is_file()) else {
             eprintln!(

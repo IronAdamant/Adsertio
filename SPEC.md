@@ -21,7 +21,10 @@ does not understand is `unreadable` or `no_adapter`, never `pass`.
   resolved inside it.
 - `<id>` is a slug: `[a-z0-9][a-z0-9-]*`, at most 64 bytes, one segment.
 - A symlink in the claims folder, or any file that is not `<id>.md`, is an
-  error for `check`. `view` and `ls` leave it out and warn on stderr.
+  error for `check`. `view` and `ls` leave it out and warn on stderr. This
+  includes dotfiles. The only exceptions are Adsertio's own files while a
+  write or attach is in flight: `.<name>.tmp-<pid>-<n>`, `.<id>.md.lock`, and
+  `.<id>.md.lock.break`.
 
 ## 2. Claims
 
@@ -72,30 +75,53 @@ Ids in Trammel selectors are the row `id`, not `step_index`.
 | same | `failure-<id>` | the row exists | this selector does not fail | no such row: `missing` |
 | `chisel:.chisel/store` | `test:<test_id>` | the latest `test_results` row has `passed` true | the latest row has `passed` false | no row: `missing` |
 | same | `file:<path>` | at least one `test_edges` row points at the file, and every such test last passed | any such test's latest result failed | a touching test has no result, or no edge touches the file: `missing` |
-| `probatio:<out-dir>` | none, or `survivors` | at least one `killed`, zero `survived`, no `flaky` or `error`, and a result for every mutant in the run's list | any result is `survived` | only `timeout`, `no coverage`, or `unviable`; any `flaky` or `error`; fewer results than the run's list; a `run.json` that cannot be read; or no results file and only a tally: `inconclusive`. An outcome Probatio does not write: `unreadable` |
+| `probatio:<out-dir>` | none, or `survivors` | at least one `killed`, zero `survived`, no `flaky`, `error`, or `no coverage`, and a result for every mutant in the run's lists | any result is `survived` | only `timeout` or `unviable`; any `flaky`, `error`, or `no coverage`; fewer results than the run's lists; a run whose lists cannot be found or read; a `mutate diff` run; or no results file and only a tally: `inconclusive`. An outcome Probatio does not write: `unreadable` |
 | same | `mutant:<id>` | `results/<id>.json` has outcome `killed` | outcome `survived` | another Probatio outcome: `inconclusive`. An outcome Probatio does not write: `unreadable` |
 | same | `ledger` | never | never | `inconclusive`, with the entry count |
 
 `killed` with `cause` `build` is `unviable`. It is not a kill and not a survivor.
 The outcomes Probatio writes are `killed`, `survived`, `timeout`,
-`no coverage`, `unviable`, `flaky`, and `error`, matched exactly. When
-`<out-dir>/run.json` names its patches (`patches`, a path or the first of a
-list) inside the project, the mutant list there (`mutants.json` in a folder,
-or the file itself) is compared with `results/`, as Probatio's tally does. A
-list outside the project, or no `run.json`, is not checked.
+`no coverage`, `unviable`, `flaky`, and `error`, matched exactly.
+`no coverage` blocks a pass: no test ran that line, and Probatio's own tally
+says that is not a pass.
+
+A whole-run pass needs the run to be complete. `<out-dir>/run.json` names its
+patches (`patches`, a path or a list of them). Every entry is read the way
+Probatio's `load_mutants` reads it: a file is a mutant list; a folder is its
+`mutants.json`, or, when there is none, every `*.json` file in it. A relative
+entry is taken from the project folder, where Probatio was run. Every mutant
+id in every list must have a result in `results/`. When this cannot be
+checked, the run is `inconclusive`, never a pass: no `run.json`, no patches
+named, an entry outside the project or gone, a list that cannot be read, or
+a list with no mutants.
+
+A `mutate diff` run (its out folder holds `plan.json`, `generate/`, and the
+run in `run/`) is always `inconclusive`. Probatio's `plan.json` holds only a
+hash of the plan, and `generate/mutants.json` holds only the mutants sent to
+the run so far, so a call capped by `--max-mutants` cannot be told from a
+whole one. `#mutant:<id>` still reads one mutant of such a run.
 
 A `file:` path matches a `code_id` when the code id is exactly that path, or
 starts with `path:` or `path/`. `src/a.rs` does not match `src/a.rs2:...`.
-The latest Chisel result is the last row in the snapshot. `tests/a.rs::name`
-and `tests/a.rs:name` are the same id.
+The latest Chisel result is the last row in the root snapshot.
+`tests/a.rs::name` and `tests/a.rs:name` are the same id.
 
-When the pointer names the root store, however it is spelt (`./`, `//`, `.`,
-or a symlinked folder, compared by resolved path), and `.chisel/shards/`
-exists, each
-shard snapshot (including `_unassigned`) is read too. A pointer at one shard
-reads only that file. A pointer under `.chisel/overlays/` is `no_adapter`:
-worktree overlays are not read. A damaged shard makes the root pointer
-`unreadable`.
+Chisel records test results (`test_results` and `test_passes`) only in the
+root store `.chisel/store`; a shard engine reads them from there. When the
+pointer names the root store, however it is spelt (`./`, `//`, `.`, a
+symlinked folder, or another letter case, compared by resolved path), and
+`.chisel/shards/` exists, every shard snapshot under it (including
+`_unassigned`, and nested ones such as `.chisel/shards/src/net/store`, since
+Chisel names a shard after its path) adds its `test_edges`. A shard's own
+`test_results` and `test_passes` are not read, so an old shard row never
+overrides the root. A damaged shard makes the root pointer `unreadable`. A
+pointer at one shard's store is `no_adapter`: its rows are not where Chisel
+keeps results.
+
+A pointer under `.chisel/overlays/` is `no_adapter`: worktree overlays are
+not read. The parts are compared without regard to letter case, and the
+path is also resolved, so `.CHISEL/OVERLAYS/...` or a symlink into the
+overlays folder is caught.
 
 ## 4. How the other files are read
 
@@ -125,6 +151,13 @@ the results stand and the detail says so. If only `tally.json` exists, the
 pointer is `inconclusive` and says that results were missing. `#ledger` reads
 `ledger.json`, counts `entries`, and is not proof.
 
+**Size.** A Trammel or Chisel store, and the Trammel journal, may be up to
+1 GiB, which is Chisel's own limit (`MAX_INPUT`), so any store Chisel writes
+can be read. Any other evidence file, Probatio's included, may be up to
+64 MiB. A larger file is `unreadable`, and the detail gives its size, the
+limit, and why: the file is read whole into memory and then indexed, so a
+read holds about the file's size plus that index.
+
 **SQLite.** A file that starts with `SQLite format 3` is `unreadable`. For
 Trammel and Chisel the detail says to run that tool's `migrate`. There is no
 SQLite reader. The live stores are JSON.
@@ -134,7 +167,10 @@ SQLite reader. The live stores are JSON.
 - A timestamp (`verification.at` or `recorded_at`) more than a second older
   than the claim's `created` becomes `stale`, and the claim is unverified.
 - A `commit` on the evidence (or, for Chisel, `test_passes` for that test)
-  is compared with `git rev-parse HEAD`. A mismatch is `stale`, and the detail
+  is compared with `git rev-parse HEAD`. Chisel writes an empty `commit` in
+  `test_passes` when it could not read HEAD. That is no commit recorded, not
+  a malformed one: no commit is checked, the timestamp rule still applies,
+  `check` does not fail on it, and the detail says Chisel recorded no commit. A mismatch is `stale`, and the detail
   names both commits. A prefix of at least 7 hex digits matches. If git is
   missing, or the folder is not a repository, the pointer is `stale` rather
   than verified.
@@ -150,7 +186,7 @@ Per pointer, `read_evidence` returns a state:
 | `pass` | The evidence says the claim holds. |
 | `fail` | The evidence says it does not. |
 | `missing` | The file or the row is not there, or a step has not been verified yet. |
-| `unreadable` | Outside the project, the wrong kind of file, over 64 MiB, not UTF-8, a symlink route out, SQLite, bad JSON, bad magic, or a selector the adapter rejects. |
+| `unreadable` | Outside the project, the wrong kind of file, over the size limit (below), not UTF-8, a symlink route out, SQLite, bad JSON, bad magic, or a selector the adapter rejects. |
 | `no_adapter` | Recognised, and not interpreted. Worktree overlays. Not proof. |
 | `inconclusive` | Read, and neither a pass nor a fail. A mutation timeout, a run with no kill and no survivor, an unchecked ledger. |
 | `stale` | Was a pass, and is older than the claim or tied to a commit that is not HEAD. |
@@ -191,7 +227,9 @@ file fails the whole view and the whole list. It is not left out.
   `limit` matches. It may judge one further claim only to see that another
   page exists, and that claim is not added to `counts`.
 - Claims are ordered by `created`, then by id, with number runs compared as
-  integers (`c2` before `c10`). `after` is the `created/id` value in
+  integers (`c2` before `c10`). Ids whose parts are equal as numbers
+  (`a01b1` and `a1b01`) are ordered by their bytes, so no two ids tie and a
+  cursor never skips or repeats a claim. `after` is the `created/id` value in
   `next_after`, split at the last `/`. `created` is matched as stored, so a
   cursor from a hand-written time that `check` reports still works. Times
   have one-second resolution: a claim created later in the same second as

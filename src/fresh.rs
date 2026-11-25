@@ -148,8 +148,13 @@ fn created_unix(text: &str) -> Option<i64> {
     Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
 }
 
+/// Only ASCII digits: `i64::from_str` would also take a leading `+`.
 fn number(text: &str, start: usize, end: usize) -> Option<i64> {
-    text.get(start..end)?.parse().ok()
+    let part = text.get(start..end)?;
+    if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    part.parse().ok()
 }
 
 fn days_in_month(year: i64, month: i64) -> i64 {
@@ -228,5 +233,8 @@ mod tests {
         assert!(created_unix("2023-02-29T00:00:00Z").is_none());
         assert!(created_unix("2026-11-25T00:00:00+00:00").is_none());
         assert!(created_unix("not-a-date").is_none());
+        assert!(created_unix("+026-11-25T00:00:00Z").is_none());
+        assert!(created_unix("2026-+1-25T00:00:00Z").is_none());
+        assert!(created_unix("2026-11-25T+1:00:00Z").is_none());
     }
 }

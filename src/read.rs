@@ -14,8 +14,15 @@ use crate::lock::{self, SharedGuard};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Evidence files larger than this are not read.
+/// Probatio files, and any other evidence file, larger than this are not read.
 pub const MAX_EVIDENCE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Trammel and Chisel stores (and the Trammel journal) larger than this are
+/// not read. It is Chisel's own limit (`json::MAX_INPUT`, 1 GiB), so any
+/// store Chisel writes can be read. The file is read whole into memory and
+/// then scanned into an index of the fields a selector needs, so a read can
+/// hold about the file's size plus that index.
+pub const MAX_STORE_BYTES: u64 = 1024 * 1024 * 1024;
 
 const COMPACT_TABLES: &[&str] = &["test_edges", "blame"];
 
@@ -85,11 +92,11 @@ pub fn load_trammel_text(project: &Path, rel: &str) -> Result<TrammelText, ReadE
     let path = open_contained(project, rel)?;
     let parent = parent_dir(&project.join(rel))?;
     let _guard = lock_sibling(project, &parent, "lock")?;
-    let bytes = read_bytes(&path, rel)?;
+    let bytes = read_bytes(&path, rel, MAX_STORE_BYTES)?;
     if is_sqlite(&bytes) {
         return Err(ReadError::Unreadable(sqlite_message("trammel")));
     }
-    let text = decode(&bytes, rel)?;
+    let text = decode(bytes, rel)?;
     // A damaged snapshot is unreadable even when a journal sits beside it.
     // Validating here does not build a value; the caller parses the document
     // it actually judges.
@@ -122,11 +129,11 @@ pub fn load_chisel_text(project: &Path, rel: &str) -> Result<String, ReadError> 
     let path = open_contained(project, rel)?;
     let parent = parent_dir(&project.join(rel))?;
     let _guard = lock_sibling(project, &parent, "chisel.lock")?;
-    let bytes = read_bytes(&path, rel)?;
+    let bytes = read_bytes(&path, rel, MAX_STORE_BYTES)?;
     if is_sqlite(&bytes) {
         return Err(ReadError::Unreadable(sqlite_message("chisel")));
     }
-    decode(&bytes, rel)
+    decode(bytes, rel)
 }
 
 /// An array of row objects, or a compact table expanded to those rows.
@@ -151,11 +158,11 @@ pub fn read_json(project: &Path, rel: &str, tool: &str) -> Result<Value, ReadErr
 /// Parse a file that the caller has already checked is a regular file inside
 /// the project. Symlinks still go through [`read_json`], which resolves them.
 pub fn read_json_file(path: &Path, label: &str, tool: &str) -> Result<Value, ReadError> {
-    let bytes = read_bytes(path, label)?;
+    let bytes = read_bytes(path, label, MAX_EVIDENCE_BYTES)?;
     if is_sqlite(&bytes) {
         return Err(ReadError::Unreadable(sqlite_message(tool)));
     }
-    let text = decode(&bytes, label)?;
+    let text = decode(bytes, label)?;
     parse_json(&text, label)
 }
 
@@ -166,11 +173,11 @@ pub fn read_chisel(project: &Path, rel: &str) -> Result<Snapshot, ReadError> {
     let path = open_contained(project, rel)?;
     let parent = parent_dir(&project.join(rel))?;
     let _guard = lock_sibling(project, &parent, "chisel.lock")?;
-    let bytes = read_bytes(&path, rel)?;
+    let bytes = read_bytes(&path, rel, MAX_STORE_BYTES)?;
     if is_sqlite(&bytes) {
         return Err(ReadError::Unreadable(sqlite_message("chisel")));
     }
-    let text = decode(&bytes, rel)?;
+    let text = decode(bytes, rel)?;
     let mut doc = parse_json(&text, rel)?;
     match doc.get("magic").and_then(Value::as_str) {
         Some("chisel-store") => {}
@@ -258,7 +265,7 @@ fn contained(project: &Path, path: &Path) -> Result<PathBuf, ReadError> {
     }
 }
 
-fn read_bytes(path: &Path, label: &str) -> Result<Vec<u8>, ReadError> {
+fn read_bytes(path: &Path, label: &str, limit: u64) -> Result<Vec<u8>, ReadError> {
     let meta = fs::metadata(path)
         .map_err(|e| ReadError::Unreadable(format!("cannot stat {label}: {e}")))?;
     if !meta.is_file() {
@@ -267,23 +274,37 @@ fn read_bytes(path: &Path, label: &str) -> Result<Vec<u8>, ReadError> {
             crate::fsx::not_a_file(&meta)
         )));
     }
-    if meta.len() > MAX_EVIDENCE_BYTES {
-        return Err(ReadError::Unreadable(format!(
-            "{label} is larger than {MAX_EVIDENCE_BYTES} bytes"
-        )));
+    if meta.len() > limit {
+        return Err(too_large(label, meta.len(), limit));
     }
     let bytes =
         fs::read(path).map_err(|e| ReadError::Unreadable(format!("cannot read {label}: {e}")))?;
-    if bytes.len() as u64 > MAX_EVIDENCE_BYTES {
-        return Err(ReadError::Unreadable(format!(
-            "{label} is larger than {MAX_EVIDENCE_BYTES} bytes"
-        )));
+    if bytes.len() as u64 > limit {
+        return Err(too_large(label, bytes.len() as u64, limit));
     }
     Ok(bytes)
 }
 
-fn decode(bytes: &[u8], label: &str) -> Result<String, ReadError> {
-    String::from_utf8(bytes.to_vec())
+/// The detail for a file over its size limit: the size, the limit, and why.
+pub fn too_large(label: &str, size: u64, limit: u64) -> ReadError {
+    ReadError::Unreadable(size_detail(label, size, limit))
+}
+
+pub fn size_detail(label: &str, size: u64, limit: u64) -> String {
+    let what = if limit == MAX_STORE_BYTES {
+        "a Trammel or Chisel store"
+    } else {
+        "this evidence file"
+    };
+    format!(
+        "{label} is larger than {limit} bytes ({} MiB, over the {} MiB limit for {what}); Adsertio reads the whole file into memory, so a larger one is refused rather than read in part",
+        size >> 20,
+        limit >> 20
+    )
+}
+
+fn decode(bytes: Vec<u8>, label: &str) -> Result<String, ReadError> {
+    String::from_utf8(bytes)
         .map_err(|_| ReadError::Unreadable(format!("{label} is not valid UTF-8")))
 }
 
@@ -310,11 +331,11 @@ fn journal_line(project: &Path, dir: &Path) -> Result<Option<String>, ReadError>
         Ok(_) => {}
     }
     contained(project, &journal)?;
-    let bytes = read_bytes(&journal, "journal")?;
+    let bytes = read_bytes(&journal, "journal", MAX_STORE_BYTES)?;
     if is_sqlite(&bytes) {
         return Err(ReadError::Unreadable(sqlite_message("trammel")));
     }
-    let text = decode(&bytes, "journal")?;
+    let text = decode(bytes, "journal")?;
     let mut chosen: Option<String> = None;
     for (index, line) in text.lines().enumerate() {
         if line.trim().is_empty() {

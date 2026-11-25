@@ -22,7 +22,7 @@ fn cli_rejects_bad_flags_with_exit_2() {
     assert_eq!(cli(&dir, &[]).status.code(), Some(2));
     assert_eq!(
         cli(&dir, &["view", "--colour", "red"]).status.code(),
-        Some(1)
+        Some(2)
     );
     assert_eq!(
         cli(&dir, &["claim", "--summary", "s", "--summary", "t"])

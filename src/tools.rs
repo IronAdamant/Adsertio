@@ -489,14 +489,18 @@ pub fn store_check() -> Result<Value, String> {
                 fsx::break_abandoned_lock(&path);
                 continue;
             }
-            if name.starts_with('.') {
+            if fsx::is_work_file(&name) {
                 continue;
             }
             let slug = name.strip_suffix(".md");
-            let file = entry
-                .file_type()
-                .map(|kind| kind.is_file())
-                .unwrap_or(false);
+            let kind = entry.file_type().ok();
+            if kind.is_some_and(|kind| kind.is_symlink()) {
+                problems.push(format!(
+                    ".adsertio/claims/{name} is a symlink, which is not followed. Make it a real <id>.md file. It is left out of adsertio_view and adsertio_ls."
+                ));
+                continue;
+            }
+            let file = kind.is_some_and(|kind| kind.is_file());
             if !file || slug.is_none_or(|id| !fsx::valid_slug(id)) {
                 problems.push(format!(
                     ".adsertio/claims/{name} is not a claim file. Use a slug id ending in .md. It is left out of adsertio_ls."

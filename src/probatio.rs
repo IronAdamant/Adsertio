@@ -4,16 +4,21 @@
 //! writes.
 //!
 //! A whole run fails only when some mutant survived. It passes only when at
-//! least one mutant was killed and none survived. `timeout`, `no coverage`,
-//! and `unviable` (including `killed` with `cause` `build`) do not survive
-//! and do not kill. On their own, with no kill and no survivor, the run is
-//! inconclusive. `flaky` and `error` block a pass: the run is inconclusive.
-//! An outcome Probatio does not write makes the run unreadable. When
-//! `run.json` names a mutant list inside the project, a pass also needs a
-//! result for every mutant in it: a run still going, or a capped run, is
-//! inconclusive. One broken results file makes the run unreadable; it is not
-//! dropped. `#ledger` counts entries and is never a pass: an unchecked ledger
-//! is not proof.
+//! least one mutant was killed, none survived, and the run is shown to be
+//! complete. `timeout` and `unviable` (including `killed` with `cause`
+//! `build`) do not survive and do not kill. On their own, with no kill and no
+//! survivor, the run is inconclusive. `flaky`, `error`, and `no coverage`
+//! block a pass: the run is inconclusive. An outcome Probatio does not write
+//! makes the run unreadable.
+//!
+//! Complete means every mutant in every mutant list `run.json` names has a
+//! result. A run still going, or a capped run, is inconclusive. So is a run
+//! whose list cannot be checked: no `run.json`, no patches, a list outside
+//! the project or gone. A `mutate diff` run is always inconclusive: Probatio
+//! does not write the full list a diff plans, so a call capped by
+//! `--max-mutants` cannot be told from a whole one. One broken results file
+//! makes the run unreadable; it is not dropped. `#ledger` counts entries and
+//! is never a pass: an unchecked ledger is not proof.
 
 use crate::claim;
 use crate::fsx;
@@ -188,7 +193,17 @@ fn whole_run(project: &Path, pointer: &str, rel: &str, out_dir: &Path) -> Eviden
             format!("{detail}; a flaky or error result did not settle its mutant"),
         );
     }
-    match planned(project, rel, &rows) {
+    let uncovered = count(&rows, "no coverage");
+    if uncovered > 0 {
+        return evidence(
+            pointer,
+            State::Inconclusive,
+            format!(
+                "{detail}; {uncovered} mutant(s) had no coverage: no test ran that line, and Probatio's tally says that is not a pass"
+            ),
+        );
+    }
+    match planned(project, rel, out_dir, &rows) {
         Plan::Waiting { done, total } => {
             return evidence(
                 pointer,
@@ -196,14 +211,14 @@ fn whole_run(project: &Path, pointer: &str, rel: &str, out_dir: &Path) -> Eviden
                 format!("{detail}; {done} of {total} mutants in the run have a result, so the run may be unfinished or capped"),
             )
         }
-        Plan::Unreadable(why) => {
+        Plan::Unknown(why) => {
             return evidence(
                 pointer,
                 State::Inconclusive,
                 format!("{detail}; cannot tell whether the run finished: {why}"),
             )
         }
-        Plan::Complete | Plan::NotChecked => {}
+        Plan::Complete => {}
     }
     if killed > 0 {
         evidence(pointer, State::Pass, detail)
@@ -219,67 +234,75 @@ enum Plan {
         done: usize,
         total: usize,
     },
-    /// `run.json` is there but cannot be read.
-    Unreadable(String),
-    /// No `run.json`, or its mutant list is outside the project.
-    NotChecked,
+    /// The run's full mutant list cannot be found or read, so the run cannot
+    /// be shown to be complete.
+    Unknown(String),
 }
 
-/// Compare the results with the mutant list `run.json` names, the same check
-/// Probatio's tally makes. Only a list inside the project is read.
-fn planned(project: &Path, rel: &str, rows: &[Mutant]) -> Plan {
+/// Compare the results with every mutant list `run.json` names, the same
+/// check Probatio's tally makes. A list that cannot be found, read, or is
+/// outside the project, means the run cannot be shown to be complete.
+fn planned(project: &Path, rel: &str, out_dir: &Path, rows: &[Mutant]) -> Plan {
+    if let Some(why) = diff_run(out_dir) {
+        return Plan::Unknown(why);
+    }
     let run_rel = format!("{rel}/run.json");
     let run = match read::read_json(project, &run_rel, "probatio") {
         Ok(value) => value,
-        Err(ReadError::Missing(_)) => return Plan::NotChecked,
-        Err(ReadError::Unreadable(text)) if text.ends_with("does not exist") => {
-            return Plan::NotChecked
+        Err(ReadError::Missing(_)) => {
+            return Plan::Unknown(format!(
+                "{run_rel} is missing, so the run's mutant list is unknown"
+            ))
         }
-        Err(ReadError::Unreadable(text)) => return Plan::Unreadable(text),
-    };
-    let patches = match run.get("patches") {
-        Some(Value::Array(items)) => items.first().and_then(Value::as_str),
-        Some(Value::String(path)) => Some(path.as_str()),
-        _ => None,
-    };
-    let Some(patches) = patches else {
-        return Plan::NotChecked;
-    };
-    let Some(list_rel) = inside_project(project, patches) else {
-        return Plan::NotChecked;
-    };
-    let list_rel = match fsx::project_file(project, &list_rel) {
-        Ok(path) if path.is_dir() => format!("{list_rel}/mutants.json"),
-        Ok(_) => list_rel,
-        Err(_) => return Plan::NotChecked,
-    };
-    let list = match read::read_json(project, &list_rel, "probatio") {
-        Ok(value) => value,
-        Err(ReadError::Missing(_)) => return Plan::NotChecked,
         Err(ReadError::Unreadable(text)) if text.ends_with("does not exist") => {
-            return Plan::NotChecked
+            return Plan::Unknown(format!(
+                "{run_rel} is missing, so the run's mutant list is unknown"
+            ))
         }
-        Err(ReadError::Unreadable(text)) => return Plan::Unreadable(text),
+        Err(ReadError::Unreadable(text)) => return Plan::Unknown(text),
     };
-    let items = match &list {
-        Value::Array(items) => items,
-        Value::Object(_) => match list.get("mutants").and_then(Value::as_array) {
-            Some(items) => items,
-            None => return Plan::Unreadable(format!("{list_rel} has no mutants list")),
-        },
-        _ => return Plan::Unreadable(format!("{list_rel} is not a mutant list")),
+    let entries: Vec<&str> = match run.get("patches") {
+        Some(Value::Array(items)) => {
+            let mut out = Vec::new();
+            for item in items {
+                match item.as_str() {
+                    Some(text) if !text.is_empty() => out.push(text),
+                    _ => {
+                        return Plan::Unknown(format!(
+                            "{run_rel} has a patches entry that is not a path"
+                        ))
+                    }
+                }
+            }
+            out
+        }
+        Some(Value::String(path)) if !path.is_empty() => vec![path.as_str()],
+        _ => return Plan::Unknown(format!("{run_rel} names no patches")),
     };
-    let mut total = 0;
-    let mut done = 0;
-    for item in items {
-        let Some(id) = item.get("id").and_then(Value::as_str) else {
-            return Plan::Unreadable(format!("{list_rel} has a mutant with no id"));
-        };
-        total += 1;
-        if rows.iter().any(|row| row.id == id) {
-            done += 1;
+    if entries.is_empty() {
+        return Plan::Unknown(format!("{run_rel} names no patches"));
+    }
+    let mut ids: Vec<String> = Vec::new();
+    for entry in entries {
+        match mutant_ids(project, entry) {
+            Ok(found) => {
+                for id in found {
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+            }
+            Err(why) => return Plan::Unknown(why),
         }
     }
+    if ids.is_empty() {
+        return Plan::Unknown(format!("the patches {run_rel} names list no mutants"));
+    }
+    let total = ids.len();
+    let done = ids
+        .iter()
+        .filter(|id| rows.iter().any(|row| &row.id == *id))
+        .count();
     if done < total {
         Plan::Waiting { done, total }
     } else {
@@ -287,13 +310,100 @@ fn planned(project: &Path, rel: &str, rows: &[Mutant]) -> Plan {
     }
 }
 
+/// `mutate diff` writes `<out>/plan.json`, `<out>/generate`, and the run in
+/// `<out>/run`. Its `plan.json` holds only a hash of the plan, and
+/// `generate/mutants.json` holds only the mutants sent to the run so far, so
+/// a call capped by `--max-mutants` (or stopped by its time budget before the
+/// batch was written) looks complete. No file names the full set.
+fn diff_run(out_dir: &Path) -> Option<String> {
+    let parent = out_dir.parent()?;
+    if parent.join("plan.json").is_file() && parent.join("generate").is_dir() {
+        Some(
+            "this is a mutate diff run; Probatio does not write the full list of mutants a diff plans (plan.json holds only a hash, and generate/mutants.json only the batch sent to the run), so a capped call cannot be told from a whole one. Point at #mutant:<id>, or score with mutate generate and mutate run".into(),
+        )
+    } else {
+        None
+    }
+}
+
+/// The mutant ids one `patches` entry holds, read the way Probatio's
+/// `load_mutants` reads them: a file is a mutant list; a folder is its
+/// `mutants.json`, or, without one, every `*.json` file in it. A relative
+/// entry is taken from the project folder, where Probatio was run.
+fn mutant_ids(project: &Path, entry: &str) -> Result<Vec<String>, String> {
+    let Some(list_rel) = inside_project(project, entry) else {
+        return Err(format!(
+            "patches \"{}\" is outside the project, or does not exist",
+            fsx::clip(entry, 80)
+        ));
+    };
+    let path = match fsx::project_file(project, &list_rel) {
+        Ok(path) => path,
+        Err(text) => return Err(format!("patches {text}")),
+    };
+    let files: Vec<String> = if path.is_file() {
+        vec![list_rel]
+    } else if path.is_dir() {
+        let combined = format!("{list_rel}/mutants.json");
+        if path.join("mutants.json").is_file() {
+            vec![combined]
+        } else {
+            let mut names = Vec::new();
+            let read =
+                fs::read_dir(&path).map_err(|error| format!("cannot read {list_rel}: {error}"))?;
+            for item in read {
+                let item = item.map_err(|error| format!("cannot read {list_rel}: {error}"))?;
+                let Some(name) = item.file_name().to_str().map(str::to_string) else {
+                    return Err(format!("a file name in {list_rel} is not UTF-8"));
+                };
+                if Path::new(&name).extension().and_then(|ext| ext.to_str()) == Some("json") {
+                    names.push(name);
+                }
+            }
+            names.sort();
+            names
+                .into_iter()
+                .map(|name| format!("{list_rel}/{name}"))
+                .collect()
+        }
+    } else {
+        return Err(format!("patches {list_rel} is not a file or folder"));
+    };
+    let mut ids = Vec::new();
+    for file in files {
+        let list = read::read_json(project, &file, "probatio")
+            .map_err(|error| error.text().to_string())?;
+        let items = match &list {
+            Value::Array(items) => items,
+            Value::Object(_) => match list.get("mutants").and_then(Value::as_array) {
+                Some(items) => items,
+                None => return Err(format!("{file} has no mutants list")),
+            },
+            _ => return Err(format!("{file} is not a mutant list")),
+        };
+        for item in items {
+            let Some(id) = item.get("id").and_then(Value::as_str) else {
+                return Err(format!("{file} has a mutant with no id"));
+            };
+            ids.push(id.to_string());
+        }
+    }
+    Ok(ids)
+}
+
 /// A path from `run.json` as a project-relative path, when it is inside the
-/// project. Probatio writes absolute paths; a relative one is taken from the
-/// project folder.
+/// project. Probatio reads a relative path from the folder it ran in; that is
+/// taken to be the project folder.
 fn inside_project(project: &Path, path: &str) -> Option<String> {
     let p = Path::new(path);
     if !p.is_absolute() {
-        return Some(path.trim_start_matches("./").to_string());
+        let text = path.replace('\\', "/");
+        let text = text.trim_start_matches("./").trim_end_matches('/');
+        return if text.is_empty() || text == "." {
+            None
+        } else {
+            Some(text.to_string())
+        };
     }
     let root = project.canonicalize().ok()?;
     let canon = p.canonicalize().ok()?;

@@ -3,9 +3,11 @@
 //! and answers `test:<id>` or `file:<path>`. It never runs Chisel and never
 //! writes. Worktree overlays under `.chisel/overlays/` are not read.
 //!
-//! The latest `test_results` row for an id is the last one in the snapshot.
-//! Shard rows come after the root snapshot, shard names in alphabetical
-//! order, which matches Chisel walking the list from the end. A `file:`
+//! The latest `test_results` row for an id is the last one in the root
+//! snapshot. Shards add their `test_edges` only: Chisel records results in
+//! the root store, so a shard's `test_results` and `test_passes` are not
+//! read and never override the root. A pointer at one shard's store is not
+//! read either. A `file:`
 //! selector passes only when at least one `test_edges` row points at that
 //! file and every such test's latest result passed.
 
@@ -36,11 +38,18 @@ pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
             Ok(_) => evidence(pointer, State::Unreadable, "path leaves the project"),
         };
     }
-    if is_overlay(rel) {
+    if is_overlay(project, rel) {
         return evidence(
             pointer,
             State::NoAdapter,
             "worktree overlays under .chisel/overlays are not read in v1, so this is not proof",
+        );
+    }
+    if is_shard(project, rel) {
+        return evidence(
+            pointer,
+            State::NoAdapter,
+            "Chisel records test results in the root store, not in a shard, so a shard's own rows are not proof. Point at .chisel/store, which also reads every shard's test edges",
         );
     }
     let index = match crate::cache::chisel(project, rel, || load_index(project, rel)) {
@@ -66,6 +75,11 @@ pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
                 found.at = stamp.at;
                 found.commits = stamp.commits;
                 found.malformed = stamp.malformed;
+                if stamp.no_commit {
+                    found.detail.push_str(
+                        "; Chisel recorded no commit for this pass (HEAD was unreadable), so no commit is checked",
+                    );
+                }
             }
             found
         }
@@ -88,18 +102,86 @@ fn path_leaves(rel: &str) -> bool {
     Path::new(rel).is_absolute() || rel.split(['/', '\\']).any(|part| part == "..")
 }
 
-fn is_overlay(rel: &str) -> bool {
+/// A pointer under `.chisel/overlays/`, however it is spelt. The parts are
+/// compared without regard to ASCII case, so `.CHISEL/OVERLAYS` on a
+/// case-insensitive disk is caught, and the path is also resolved, so a
+/// symlink into the overlays folder is caught too.
+fn is_overlay(project: &Path, rel: &str) -> bool {
+    under_chisel(project, rel, "overlays")
+}
+
+/// A pointer at one shard's own store, under `.chisel/shards/`.
+fn is_shard(project: &Path, rel: &str) -> bool {
+    under_chisel(project, rel, "shards")
+}
+
+fn under_chisel(project: &Path, rel: &str, folder: &str) -> bool {
     let norm = rel.replace('\\', "/");
     let parts: Vec<&str> = norm
         .split('/')
         .filter(|part| !part.is_empty() && *part != ".")
         .collect();
-    parts.windows(2).any(|pair| pair == [".chisel", "overlays"])
+    if names_folder(&parts, folder) {
+        return true;
+    }
+    let Ok(root) = project.canonicalize() else {
+        return false;
+    };
+    let Some(target) = resolve_existing(&project.join(rel)) else {
+        return false;
+    };
+    let root_parts = parts_of(&root);
+    let target_parts = parts_of(&target);
+    if target_parts.len() < root_parts.len()
+        || !root_parts
+            .iter()
+            .zip(&target_parts)
+            .all(|(left, right)| left.eq_ignore_ascii_case(right))
+    {
+        return false;
+    }
+    let inside: Vec<&str> = target_parts[root_parts.len()..]
+        .iter()
+        .map(String::as_str)
+        .collect();
+    names_folder(&inside, folder)
 }
 
-/// The root store, however the pointer spells it (`./`, `//`, `.`, or a
-/// symlinked folder): the shards merge into it, so a failing shard result is
-/// never hidden.
+fn names_folder(parts: &[&str], folder: &str) -> bool {
+    parts
+        .windows(2)
+        .any(|pair| pair[0].eq_ignore_ascii_case(".chisel") && pair[1].eq_ignore_ascii_case(folder))
+}
+
+fn parts_of(path: &Path) -> Vec<String> {
+    path.components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// The path with its longest existing prefix resolved (symlinks followed),
+/// and the rest, which does not exist, appended as written.
+fn resolve_existing(path: &Path) -> Option<std::path::PathBuf> {
+    let mut rest: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = path.to_path_buf();
+    loop {
+        if let Ok(canon) = cur.canonicalize() {
+            let mut out = canon;
+            for part in rest.iter().rev() {
+                out.push(part);
+            }
+            return Some(out);
+        }
+        rest.push(cur.file_name()?.to_os_string());
+        if !cur.pop() {
+            return None;
+        }
+    }
+}
+
+/// The root store, however the pointer spells it (`./`, `//`, `.`, a
+/// symlinked folder, or another letter case on a case-insensitive disk): the
+/// shards' test edges merge into it.
 fn is_root_store(project: &Path, rel: &str) -> bool {
     let norm = rel.replace('\\', "/");
     if norm.trim_start_matches("./") == ".chisel/store" {
@@ -109,7 +191,9 @@ fn is_root_store(project: &Path, rel: &str) -> bool {
         project.join(rel).canonicalize(),
         project.join(".chisel").join("store").canonicalize(),
     ) {
-        (Ok(named), Ok(root)) => named == root,
+        (Ok(named), Ok(root)) => named
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&root.to_string_lossy()),
         _ => false,
     }
 }
@@ -153,7 +237,7 @@ fn load_index(project: &Path, rel: &str) -> Result<crate::chisel_idx::Index, Rea
     }
     for rel_store in shard_stores(project)? {
         match crate::chisel_idx::parse_file(project, &rel_store) {
-            Ok(part) => index.merge(part),
+            Ok(part) => index.merge_shard(part),
             Err(ReadError::Missing(_)) => {}
             Err(error) => return Err(error),
         }
@@ -211,10 +295,58 @@ fn shard_stores(project: &Path) -> Result<Vec<String>, ReadError> {
         }
     }
     names.sort();
-    Ok(names
+    let mut stores = Vec::new();
+    for name in names {
+        nested_stores(&root.join(&name), &name, 1, &mut stores)?;
+    }
+    Ok(stores
         .into_iter()
         .map(|name| format!(".chisel/shards/{name}/store"))
         .collect())
+}
+
+/// How deep shard folders are looked for. Chisel names a shard after its
+/// path prefix, so a shard `src/net` is stored at `.chisel/shards/src/net/`.
+const SHARD_DEPTH: usize = 8;
+
+/// `name` when it holds a `store`, then every folder below it that does, so
+/// a nested shard's test edges are not missed. Symlinked folders below the
+/// first level are not followed.
+fn nested_stores(
+    dir: &Path,
+    name: &str,
+    depth: usize,
+    out: &mut Vec<String>,
+) -> Result<(), ReadError> {
+    if fs::symlink_metadata(dir.join("store")).is_ok() {
+        out.push(name.to_string());
+    }
+    if depth >= SHARD_DEPTH {
+        return Ok(());
+    }
+    let Ok(read) = fs::read_dir(dir) else {
+        return Ok(());
+    };
+    let mut kids = Vec::new();
+    for entry in read {
+        let entry = entry.map_err(|error| {
+            ReadError::Unreadable(format!("cannot read .chisel/shards/{name}: {error}"))
+        })?;
+        let Some(kid) = entry.file_name().to_str().map(str::to_string) else {
+            return Err(ReadError::Unreadable("a shard name is not UTF-8".into()));
+        };
+        if kid.starts_with('.') || kid.contains("..") {
+            continue;
+        }
+        if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            kids.push(kid);
+        }
+    }
+    kids.sort();
+    for kid in kids {
+        nested_stores(&dir.join(&kid), &format!("{name}/{kid}"), depth + 1, out)?;
+    }
+    Ok(())
 }
 
 fn judge(
@@ -315,4 +447,5 @@ fn merge_stamp(into: &mut crate::chisel_idx::Stamp, step: &crate::chisel_idx::St
     };
     into.commits.extend(step.commits.iter().cloned());
     into.malformed |= step.malformed;
+    into.no_commit |= step.no_commit;
 }

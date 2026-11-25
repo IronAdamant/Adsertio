@@ -131,7 +131,7 @@ pub fn read_evidence(project: &Path, pointer: &str) -> Evidence {
     if meta.len() > MAX_EVIDENCE_BYTES {
         return mk(
             State::Unreadable,
-            format!("{path} is larger than {MAX_EVIDENCE_BYTES} bytes"),
+            read::size_detail(path, meta.len(), MAX_EVIDENCE_BYTES),
         );
     }
     let bytes = match std::fs::read(&file) {
@@ -141,7 +141,7 @@ pub fn read_evidence(project: &Path, pointer: &str) -> Evidence {
     if bytes.len() as u64 > MAX_EVIDENCE_BYTES {
         return mk(
             State::Unreadable,
-            format!("{path} is larger than {MAX_EVIDENCE_BYTES} bytes"),
+            read::size_detail(path, bytes.len() as u64, MAX_EVIDENCE_BYTES),
         );
     }
     if read::is_sqlite(&bytes) {

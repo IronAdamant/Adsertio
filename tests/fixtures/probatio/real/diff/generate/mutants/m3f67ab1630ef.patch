@@ -1,0 +1,10 @@
+# probatio-mutant direction=forward meaning=apply-to-introduce-the-bug
+--- a/pkg/calc.py
++++ b/pkg/calc.py
+@@ -5,5 +5,5 @@
+     return n < 0
+ 
+ def big(n):
+-    return n > 9 and n < 99
++    return n >= 9 and n < 99
+ 

@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "mutants": [
+    {"id": "m1", "file": "src/a.rs", "line": 1, "start": 0, "end": 1, "op": "gt-to-ge", "original": ">", "replacement": ">="},
+    {"id": "m2", "file": "src/a.rs", "line": 2, "start": 10, "end": 11, "op": "gt-to-ge", "original": ">", "replacement": ">="}
+  ]
+}

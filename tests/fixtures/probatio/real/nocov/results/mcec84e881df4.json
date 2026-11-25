@@ -1,0 +1,19 @@
+{
+  "id": "mcec84e881df4",
+  "file": "pkg/calc.py",
+  "line": 2,
+  "outcome": "killed",
+  "selectedCount": 1,
+  "selectionCapped": false,
+  "durationMs": 60,
+  "timedOut": false,
+  "tests": [
+    "tests.test_calc.T.test_pos"
+  ],
+  "command": "python3 /project/.probatio/nocov/reporter.py tests.test_calc.T.test_pos",
+  "direction": "forward",
+  "mutantHash": "f6cee82d53e36303a030055a6254532763c6f4d42e68744f039cc6538370c2eb",
+  "killedBy": [
+    "tests/test_calc.py::tests.test_calc.T.test_pos"
+  ]
+}

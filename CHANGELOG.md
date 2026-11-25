@@ -1,5 +1,64 @@
 # Changelog
 
+## 1.2.2
+
+Same claim format as 1.2.1. The rule for this release: when Adsertio cannot
+show that a run is complete, or that a result is the latest, the answer is
+`inconclusive` (or `no_adapter`), never `pass`. A failure still refutes.
+Several pointers that 1.2.1 called pass are now inconclusive, on purpose.
+
+- A Probatio `mutate diff` call capped by `--max-mutants` read verified: its
+  `generate/mutants.json` lists only the batch sent to the run, so every
+  mutant in it had a result. Probatio does not write the full list a diff
+  plans (`plan.json` holds only a hash), so a capped call cannot be told from
+  a whole one. A `mutate diff` run is now always `inconclusive`. Point at
+  `#mutant:<id>`, or use `mutate generate` and `mutate run` for a whole run.
+- A Probatio whole-run pointer passed when the run's mutant list could not be
+  checked: no `run.json`, a list outside the project, a deleted patches
+  folder, or a patches folder with one file per mutant and no `mutants.json`.
+  Each of these is now `inconclusive`. A folder without `mutants.json` is
+  read like Probatio's `load_mutants` reads it (every `*.json` in it), every
+  `patches` entry is checked, not only the first, and a relative entry such
+  as `.probatio/slice` is taken from the project folder.
+- A `no coverage` mutant now blocks a Probatio pass (`inconclusive`), since
+  Probatio's own tally says it is not a pass. A run with a kill and a
+  `no coverage` result was verified in 1.2.1 and is unverified now.
+- A Chisel shard's `test_results` row could override a newer root result.
+  Chisel records results only in the root store (a shard engine reads them
+  from there), so shard result rows and `test_passes` are no longer read; the
+  shards still add their test edges. Nested shards such as
+  `.chisel/shards/src/net/store` (Chisel names a shard after its path) are
+  now found. A pointer at one shard's store is `no_adapter`. SPEC no longer
+  claims the old merge matched Chisel.
+- The overlay guard compared path parts exactly, so `.CHISEL/OVERLAYS/...` on
+  a case-insensitive disk, or a symlink into `.chisel/overlays/`, was read.
+  Parts are compared without regard to letter case, and the resolved path is
+  checked too.
+- Paging: ids whose number runs are equal (`a01b1`, `a1b01`) compared equal,
+  so `--after` could skip one created in the same second. Ties now fall back
+  to the bytes, and the order is total.
+- Command line: a repeated `--limit`, `--offset`, `--compact` (any flag but
+  `--evidence`, `--tags`, `--states`) silently took the first value; it is
+  now a usage error. An unknown flag exits 2 (usage error), not 1. A value
+  that starts with `--` is passed as `--name=value` or `--name -- value`.
+- A symlinked `claims/<x>.md` made `view` and `ls` fail. It is left out with
+  a warning, as SPEC says, and `check` reports it. `check` now also reports a
+  dotfile in the claims folder that is not one of Adsertio's own temp, lock,
+  or guard files, and `view` and `ls` warn about it.
+- Chisel writes `test_passes[id].commit = ""` when it cannot read HEAD. That
+  was treated as malformed (stale, and `check` exited 1). It is now no
+  commit recorded: no commit is checked, the timestamp rule still applies,
+  and the detail says so.
+- A Trammel or Chisel store over 64 MiB was unreadable, though Chisel writes
+  stores up to 1 GiB. The limit for those stores (and the Trammel journal)
+  is now 1 GiB, Chisel's own limit; other evidence files keep 64 MiB. The
+  unreadable detail gives the size, the limit, and why (the file is read
+  whole into memory). A read no longer copies the bytes a second time.
+- A `created` time with a `+` in a number field (`+026-...`) was accepted.
+  It is rejected.
+- AGENTS.md lists every test file; the Probatio adapter's header now
+  describes what the code does.
+
 ## 1.2.1
 
 Same claim format as 1.2.0. Fixes from the fifth review. A few runs that 1.2.0

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "seed": 20261003,
+  "operators": "core",
+  "mutants": [
+    {
+      "id": "m5e4978b9dadb",
+      "file": "pkg/calc.py",
+      "line": 5,
+      "start": 55,
+      "end": 56,
+      "op": "lt-to-le",
+      "original": "<",
+      "replacement": "<=",
+      "patch": "m5e4978b9dadb.patch"
+    },
+    {
+      "id": "mcec84e881df4",
+      "file": "pkg/calc.py",
+      "line": 2,
+      "start": 25,
+      "end": 26,
+      "op": "gt-to-ge",
+      "original": ">",
+      "replacement": ">=",
+      "patch": "mcec84e881df4.patch"
+    }
+  ]
+}

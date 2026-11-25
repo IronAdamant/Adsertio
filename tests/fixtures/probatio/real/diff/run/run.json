@@ -1,0 +1,10 @@
+{
+  "package": ".",
+  "patches": [
+    "/project/.probatio/diff/generate"
+  ],
+  "out": "/project/.probatio/diff/run",
+  "suiteCommand": "python3 -m unittest discover -s tests",
+  "confirm": true,
+  "workers": 1
+}

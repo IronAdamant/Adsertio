@@ -12,6 +12,9 @@ pub struct Stamp {
     pub at: Option<f64>,
     pub commits: Vec<String>,
     pub malformed: bool,
+    /// `test_passes` has an empty `commit`: Chisel could not read HEAD when
+    /// it noted the pass. No commit was recorded, so none is checked.
+    pub no_commit: bool,
 }
 
 impl Stamp {
@@ -20,6 +23,7 @@ impl Stamp {
             at: None,
             commits: Vec::new(),
             malformed: false,
+            no_commit: false,
         }
     }
 }
@@ -48,6 +52,9 @@ struct TestRec {
 struct PassCommit {
     commit: Option<String>,
     bad: bool,
+    /// The commit is the empty string, which Chisel writes when HEAD cannot
+    /// be read (`git::head_commit_fast(..).unwrap_or_default()`).
+    empty: bool,
 }
 
 struct Edges {
@@ -165,18 +172,12 @@ impl Index {
         }
     }
 
-    pub fn merge(&mut self, later: Index) {
-        merge_map(
-            &mut self.results,
-            later.results,
-            "test_results",
-            |left, right| {
-                for (id, rec) in right {
-                    left.insert(id, rec);
-                }
-            },
-        );
-        merge_map(&mut self.edges, later.edges, "test_edges", |left, right| {
+    /// Add one shard's `test_edges`. Its `test_results` and `test_passes`
+    /// are not read: Chisel records results only in the root store (a shard
+    /// engine reads them from there), so a shard row is never newer than the
+    /// root and must not override it.
+    pub fn merge_shard(&mut self, shard: Index) {
+        merge_map(&mut self.edges, shard.edges, "test_edges", |left, right| {
             for (code, tests) in right.by_code {
                 let list = left.by_code.entry(code).or_default();
                 for test in tests {
@@ -187,9 +188,6 @@ impl Index {
             }
             left.finish();
         });
-        for (id, pass) in later.passes {
-            self.passes.entry(id).or_insert(pass);
-        }
     }
 
     pub fn test(&self, id: &str) -> Result<Option<TestHit>, String> {
@@ -236,6 +234,7 @@ impl Index {
                 at: None,
                 commits: Vec::new(),
                 malformed: true,
+                no_commit: false,
             };
         }
         if rec.commit_bad {
@@ -243,6 +242,7 @@ impl Index {
                 at: rec.at,
                 commits: Vec::new(),
                 malformed: true,
+                no_commit: false,
             };
         }
         if rec.commit_seen {
@@ -250,6 +250,7 @@ impl Index {
                 at: rec.at,
                 commits: rec.commit.iter().cloned().collect(),
                 malformed: false,
+                no_commit: false,
             };
         }
         match self.passes.get(&normalize_test_id(id)) {
@@ -257,16 +258,19 @@ impl Index {
                 at: rec.at,
                 commits: Vec::new(),
                 malformed: true,
+                no_commit: false,
             },
             Some(pass) => Stamp {
                 at: rec.at,
                 commits: pass.commit.iter().cloned().collect(),
                 malformed: false,
+                no_commit: pass.empty,
             },
             None => Stamp {
                 at: rec.at,
                 commits: Vec::new(),
                 malformed: false,
+                no_commit: false,
             },
         }
     }
@@ -592,6 +596,7 @@ fn take_passes(
             PassCommit {
                 commit: None,
                 bad: false,
+                empty: false,
             }
         };
         into.entry(id).or_insert(pass);
@@ -619,16 +624,18 @@ fn parse_pass(parser: &mut Parser<'_>, depth: usize) -> Result<PassCommit, JsonE
         return Ok(PassCommit {
             commit: None,
             bad: true,
+            empty: false,
         });
     }
-    let (commit, bad) = match commit.flatten() {
-        None => (None, false),
+    let (commit, bad, empty) = match commit.flatten() {
+        None => (None, false, false),
+        Some(text) if text.trim().is_empty() => (None, false, true),
         Some(text) => {
             let (commit, bad) = crate::fresh::read_commit(Some(&Value::String(text)));
-            (commit, bad)
+            (commit, bad, false)
         }
     };
-    Ok(PassCommit { commit, bad })
+    Ok(PassCommit { commit, bad, empty })
 }
 
 fn skip_blame(parser: &mut Parser<'_>, depth: usize, rel: &str) -> Result<(), Fail> {

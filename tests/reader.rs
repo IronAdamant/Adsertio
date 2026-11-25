@@ -144,8 +144,7 @@ fn an_oversized_snapshot_is_not_read() {
     let dir = project.join(".trammel");
     fs::create_dir_all(&dir).unwrap();
     let file = fs::File::create(dir.join("store")).unwrap();
-    file.set_len(adsertio::read::MAX_EVIDENCE_BYTES + 1)
-        .unwrap();
+    file.set_len(adsertio::read::MAX_STORE_BYTES + 1).unwrap();
     let text = adsertio::read::read_trammel(&project, ".trammel/store")
         .unwrap_err()
         .text()

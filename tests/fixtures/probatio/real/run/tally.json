@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "ok": true,
+  "command": "mutate.tally",
+  "summary": "0 no coverage, 0 survived, 2 killed, 2 tests killed a mutant, 0 tests saw no kill in this batch, 0 gaps. No test file was deleted.",
+  "next": "No survivor in this run. No test file was deleted.",
+  "nextCall": {
+    "argv": [
+      "mutate",
+      "run",
+      "--package",
+      ".",
+      "--patches",
+      ".probatio/slice",
+      "--out",
+      "/project/.probatio/run.rescore",
+      "--only-test",
+      "tests/test_calc.py::tests.test_calc.T.test_neg",
+      "--only-test",
+      "tests/test_calc.py::tests.test_calc.T.test_pos"
+    ]
+  },
+  "keep": [
+    "tests/test_calc.py::tests.test_calc.T.test_neg",
+    "tests/test_calc.py::tests.test_calc.T.test_pos"
+  ],
+  "noKillsYet": [],
+  "gaps": [],
+  "rest": 0,
+  "deletedTests": 0,
+  "pruning": {
+    "mode": "advisory",
+    "deletedTests": 0,
+    "advice": []
+  },
+  "full": "/project/.probatio/run/tally.json"
+}
