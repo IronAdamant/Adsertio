@@ -73,12 +73,37 @@ impl Store {
                 .map_err(|e| format!("cannot read the working folder: {e}"))?
                 .join(".adsertio"),
         };
-        fsx::make_private_dir(&dir.join("claims"))?;
+        let claims = dir.join("claims");
+        if let Ok(meta) = fs::symlink_metadata(&claims) {
+            if meta.file_type().is_symlink() {
+                return Err(".adsertio/claims is a symlink; refusing to follow it. Run `adsertio init` so claims is a real folder inside the project.".into());
+            }
+        }
+        fsx::make_private_dir(&claims)?;
         Store::at(dir)
     }
 
     pub fn claims_dir(&self) -> PathBuf {
         self.dir.join("claims")
+    }
+}
+
+/// The claims folder must be a real directory. A symlink is refused, because
+/// following it would read and write outside the project. `create` is only
+/// for `init`.
+pub fn claims_ready(store: &Store, create: bool) -> Result<(), String> {
+    let dir = store.claims_dir();
+    match fs::symlink_metadata(&dir) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(
+            ".adsertio/claims is a symlink; refusing to follow it. Run `adsertio init` so claims is a real folder inside the project.".into(),
+        ),
+        Ok(meta) if meta.is_dir() => Ok(()),
+        Ok(_) => Err(".adsertio/claims is not a folder. Run `adsertio init`.".into()),
+        Err(_) if create => fsx::make_private_dir(&dir),
+        Err(_) => Err(format!(
+            "no claims store found at {}; run init",
+            store.dir.display()
+        )),
     }
 }
 

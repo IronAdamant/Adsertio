@@ -38,6 +38,10 @@ pub struct Args {
 
 /// Longest single string argument, in bytes.
 pub const MAX_STRING: usize = 20_000;
+
+/// The range `limit` actually accepts. Schema minimum and the tool agree.
+pub const LIMIT_RANGE: &str =
+    "limit must be a whole number from 1 to 500. Omit limit to return every claim.";
 /// Most items in a list argument.
 pub const MAX_LIST: usize = 50;
 
@@ -181,11 +185,12 @@ fn check_value(p: &Param, v: &Value) -> Result<(), String> {
         (Kind::Str, _) => bad("a string"),
         (Kind::UInt, v) if v.as_u64().is_some() => {
             let n = v.as_u64().unwrap();
-            if p.name == "limit" && n < 1 {
-                return Err("limit must be at least 1. Omit limit to return every claim.".into());
+            if p.name == "limit" && !(1..=500).contains(&n) {
+                return Err(LIMIT_RANGE.into());
             }
             Ok(())
         }
+        (Kind::UInt, _) if p.name == "limit" => Err(LIMIT_RANGE.into()),
         (Kind::UInt, _) => Err(format!(
             "{} must be a whole number from 0 up to 18446744073709551615",
             p.name

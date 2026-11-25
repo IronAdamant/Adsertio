@@ -16,6 +16,11 @@ pub fn apply(project: &Path, created: &str, evidence: &mut Evidence) {
     if evidence.state != State::Pass {
         return;
     }
+    if evidence.malformed {
+        evidence.state = State::Stale;
+        evidence.detail = format!("stale: malformed timestamp or commit; {}", evidence.detail);
+        return;
+    }
     if evidence.at.is_none() && evidence.commits.is_empty() {
         note_no_time(evidence);
         return;
@@ -77,6 +82,38 @@ fn note_no_time(evidence: &mut Evidence) {
     if !evidence.detail.contains("no timestamp") {
         evidence.detail.push_str("; no timestamp");
     }
+}
+
+/// A timestamp field. The bool is true when the field is present but not a finite number.
+pub fn read_time(value: Option<&crate::json::Value>) -> (Option<f64>, bool) {
+    match value {
+        None => (None, false),
+        Some(v) => match v.as_f64() {
+            Some(n) => (Some(n), false),
+            None => (None, true),
+        },
+    }
+}
+
+/// A commit field. The bool is true when the field is present but empty or not text.
+pub fn read_commit(value: Option<&crate::json::Value>) -> (Option<String>, bool) {
+    match value {
+        None => (None, false),
+        Some(crate::json::Value::String(text)) => {
+            let text = text.trim();
+            if text.is_empty() {
+                (None, true)
+            } else {
+                (Some(text.to_string()), false)
+            }
+        }
+        Some(_) => (None, true),
+    }
+}
+
+/// `YYYY-MM-DDTHH:MM:SSZ`.
+pub fn valid_created(text: &str) -> bool {
+    created_unix(text).is_some()
 }
 
 /// `YYYY-MM-DDTHH:MM:SSZ` as unix seconds. Anything else is `None`.

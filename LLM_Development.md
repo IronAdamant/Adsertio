@@ -2,7 +2,7 @@
 
 ## Project overview
 
-**Adsertio** 1.0.0 is a std-only Rust binary (`adsertio`, `adsertio-mcp`) that gives
+**Adsertio** 1.1.1 is two binaries from one program (`adsertio`, `adsertio-mcp`) that give
 one verified-or-unverified view per claim, read from the evidence Trammel, Chisel and
 Probatio leave on disk. It does not call an LLM.
 
@@ -11,13 +11,13 @@ Probatio leave on disk. It does not call an LLM.
 
 ## Active context
 
-- **Version:** 1.1.0 in the tree, on a branch. 1.0.0 is the tagged GitHub release. Not published to npm or crates.io.
-- **1.1.0:** evidence cache for one view, Probatio regular-file reads, `adsertio_guide`, paged `ls` and `view`. See `docs/perf/`.
+- **Version:** 1.1.1. 1.0.0 is the tagged GitHub release. 1.1.1 is the next tag. Not published to npm or crates.io.
+- **1.1.1:** review fixes on top of the 1.1.0 read cache, guide, and paging. See `docs/perf/`.
 - **Built:** claim, attach, view, ls; Trammel, Chisel, and Probatio readers;
   freshness; strict store; hostile-input tests.
 - **Not built:** worktree overlays, a ledger re-catch verdict, Libellus id
   resolution, release binaries, npm. See SPEC.md section 8.
-- **Next:** tag and publish only after Aron says so.
+- **Next:** tag v1.1.1 after this branch is merged. Do not move the v1.0.0 tag.
 
 ## Session log
 
@@ -32,6 +32,18 @@ Probatio leave on disk. It does not call an LLM.
   Probatio result files. Listing claim files did not get faster.
 - `adsertio_guide`, and `limit` / `offset` on `ls` and `view`. Counts still
   cover the whole store. Omit limit to return every claim.
+
+---
+
+## 1.1.1: third review
+
+**Date:** 2026-11-25
+
+- Page hints keep the view filters. A symlinked claims folder is refused.
+- Bad claim names are skipped with a warning and flagged by check. Bad created
+  times and malformed evidence timestamps are stale, and check names them.
+- Caps: 50 pointers, 20000 byte body, 262144 byte claim file. Auto ids retry.
+  `adsertio_check` mirrors `adsertio check`. `jsonrpc` must be `2.0`.
 
 ---
 

@@ -7,7 +7,7 @@
 
 use crate::json::Value;
 use crate::tool::{Kind, Tool};
-use crate::{claim, store::Store, tools, SERVER, VERSION};
+use crate::{store::Store, tools, SERVER, VERSION};
 
 const HELP: &str = "adsertio: one verified-or-unverified view per claim
 
@@ -47,7 +47,7 @@ pub fn run(args: &[String], as_mcp: bool) -> i32 {
             Store::init()
                 .map(|s| Value::obj(vec![("store", Value::String(s.dir.display().to_string()))])),
         ),
-        "check" => finish(check()),
+        "check" => finish(crate::tools::store_check()),
         other => match tools::TOOLS
             .iter()
             .find(|t| t.name.strip_prefix("adsertio_") == Some(other))
@@ -142,25 +142,4 @@ fn build_args(tool: &Tool, argv: &[String]) -> Result<Value, String> {
         }
     }
     Ok(Value::Object(pairs))
-}
-
-/// Read every claim. Any damage is an error; stray temp files are reported so
-/// they can be removed.
-fn check() -> Result<Value, String> {
-    let store = Store::open()?;
-    let claims = claim::load_all(&store)?;
-    let mut strays = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(store.claims_dir()) {
-        for e in rd.flatten() {
-            let n = e.file_name().to_string_lossy().to_string();
-            if n.starts_with('.') && n.contains(".tmp-") {
-                strays.push(Value::String(n));
-            }
-        }
-    }
-    Ok(Value::obj(vec![
-        ("ok", Value::Bool(true)),
-        ("claims", Value::uint(claims.len() as u64)),
-        ("stray_temp_files", Value::Array(strays)),
-    ]))
 }

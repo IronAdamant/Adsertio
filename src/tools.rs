@@ -59,6 +59,13 @@ pub static TOOLS: &[Tool] = &[
         run: ls,
     },
     Tool {
+        name: "adsertio_check",
+        group: "core",
+        description: "Read every claim. Fail on damage, a bad file name, a bad created time, a stale attach lock, or a malformed evidence timestamp. Same as the adsertio check command.",
+        params: &[],
+        run: check_tool,
+    },
+    Tool {
         name: "adsertio_guide",
         group: "core",
         description: "Short guide for an agent: how a verdict is decided, the pointer shapes, paging, and what to call after the conversation is compacted. Does not read the store.",
@@ -69,16 +76,25 @@ pub static TOOLS: &[Tool] = &[
 
 fn claim_add(a: &Args) -> Result<Value, String> {
     let store = Store::open()?;
+    crate::store::claims_ready(&store, false)?;
     let summary = a.str("summary").unwrap_or_default();
     claim::validate_summary(summary)?;
-    let evidence: Vec<String> = a.list("evidence").iter().map(|s| s.to_string()).collect();
+    let mut evidence: Vec<String> = a.list("evidence").iter().map(|s| s.to_string()).collect();
     for p in &evidence {
         claim::valid_pointer(p)?;
     }
-    let tags: Vec<String> = a.list("tags").iter().map(|s| s.to_string()).collect();
+    evidence = dedupe(evidence);
+    if evidence.len() > claim::MAX_POINTERS {
+        return Err(format!(
+            "a claim holds {} pointers at most",
+            claim::MAX_POINTERS
+        ));
+    }
+    let mut tags: Vec<String> = a.list("tags").iter().map(|s| s.to_string()).collect();
     if let Some(bad) = tags.iter().find(|t| !fsx::valid_slug(t)) {
         return Err(format!("bad tag \"{}\": use a slug", fsx::clip(bad, 40)));
     }
+    tags = dedupe(tags);
     let author = a.str("author").unwrap_or("agent");
     if !fsx::valid_slug(author) {
         return Err(format!(
@@ -86,38 +102,72 @@ fn claim_add(a: &Args) -> Result<Value, String> {
             fsx::clip(author, 40)
         ));
     }
+    let body = a.str("body").unwrap_or_default();
+    if body.len() > claim::MAX_BODY_BYTES {
+        return Err(format!(
+            "body is longer than {} bytes",
+            claim::MAX_BODY_BYTES
+        ));
+    }
+    let explicit = a.str("id").map(str::to_string);
+    let slug = explicit.clone().unwrap_or_else(|| slug_from(summary));
     let dir = store.claims_dir();
-    let id = match a.str("id") {
-        Some(id) => id.to_string(),
-        None => unique_id(&dir, summary)?,
-    };
-    let path = fsx::join_id(&dir, &id, 1)?.with_extension("md");
-    fsx::make_private_dir(&dir)?;
-    let c = Claim {
-        id: id.clone(),
-        summary: summary.to_string(),
-        author: author.to_string(),
-        created: fsx::now_iso(),
-        evidence,
-        tags,
-        body: a.str("body").unwrap_or_default().to_string(),
-    };
-    fsx::write_atomic(&path, c.render().as_bytes(), false).map_err(|e| {
-        if e.contains("already exists") {
-            format!(
-                "claim \"{id}\" already exists at .adsertio/claims/{id}.md. Use another id, or adsertio_attach to add evidence."
-            )
-        } else {
-            format!("claim \"{id}\" not written: {e}")
+    for n in 1..1000 {
+        if explicit.is_some() && n > 1 {
+            break;
         }
-    })?;
-    Ok(Value::obj(vec![
-        ("id", Value::String(id)),
-        ("evidence", Value::uint(c.evidence.len() as u64)),
-    ]))
+        let id = match &explicit {
+            Some(id) => id.clone(),
+            None if n == 1 => slug.clone(),
+            None => format!("{slug}-{n}"),
+        };
+        let path = fsx::join_id(&dir, &id, 1)?.with_extension("md");
+        let c = Claim {
+            id: id.clone(),
+            summary: summary.to_string(),
+            author: author.to_string(),
+            created: fsx::now_iso(),
+            evidence: evidence.clone(),
+            tags: tags.clone(),
+            body: body.to_string(),
+        };
+        let bytes = c.render().into_bytes();
+        if bytes.len() as u64 > claim::MAX_CLAIM_BYTES {
+            return Err(format!(
+                "claim \"{id}\" would be larger than {} bytes",
+                claim::MAX_CLAIM_BYTES
+            ));
+        }
+        match fsx::write_atomic(&path, &bytes, false) {
+            Ok(()) => {
+                return Ok(Value::obj(vec![
+                    ("id", Value::String(id)),
+                    ("evidence", Value::uint(c.evidence.len() as u64)),
+                ]));
+            }
+            Err(e) if e.contains("already exists") && explicit.is_none() => continue,
+            Err(e) if e.contains("already exists") => {
+                return Err(format!(
+                    "claim \"{id}\" already exists at .adsertio/claims/{id}.md. Use another id, or adsertio_attach to add evidence."
+                ));
+            }
+            Err(e) => return Err(format!("claim \"{id}\" not written: {e}")),
+        }
+    }
+    Err("could not find a free id; pass id".into())
 }
 
-fn unique_id(dir: &std::path::Path, summary: &str) -> Result<String, String> {
+fn dedupe(items: Vec<String>) -> Vec<String> {
+    let mut kept = Vec::new();
+    for item in items {
+        if !kept.iter().any(|seen: &String| seen == &item) {
+            kept.push(item);
+        }
+    }
+    kept
+}
+
+fn slug_from(summary: &str) -> String {
     let mut slug: String = summary
         .to_lowercase()
         .chars()
@@ -129,26 +179,16 @@ fn unique_id(dir: &std::path::Path, summary: &str) -> Result<String, String> {
         .join("-");
     slug.truncate(48);
     let slug = slug.trim_matches('-').to_string();
-    let slug = if slug.is_empty() {
+    if slug.is_empty() {
         "claim".to_string()
     } else {
         slug
-    };
-    for n in 1..1000 {
-        let id = if n == 1 {
-            slug.clone()
-        } else {
-            format!("{slug}-{n}")
-        };
-        if !dir.join(format!("{id}.md")).exists() {
-            return Ok(id);
-        }
     }
-    Err("could not find a free id; pass id".into())
 }
 
 fn attach(a: &Args) -> Result<Value, String> {
     let store = Store::open()?;
+    crate::store::claims_ready(&store, false)?;
     let id = a.str("id").unwrap_or("");
     let incoming: Vec<String> = a
         .list("evidence")
@@ -197,8 +237,22 @@ fn attach(a: &Args) -> Result<Value, String> {
                 ));
             }
         }
+        if claim.evidence.len() + incoming.len() > claim::MAX_POINTERS {
+            return Err(format!(
+                "claim \"{id}\" would have more than {} pointers. A claim holds {} at most; nothing was written.",
+                claim::MAX_POINTERS,
+                claim::MAX_POINTERS
+            ));
+        }
         claim.evidence.extend(incoming.iter().cloned());
-        fsx::write_atomic(&path, claim.render().as_bytes(), true)
+        let bytes = claim.render().into_bytes();
+        if bytes.len() as u64 > claim::MAX_CLAIM_BYTES {
+            return Err(format!(
+                "claim \"{id}\" would be larger than {} bytes; nothing was written.",
+                claim::MAX_CLAIM_BYTES
+            ));
+        }
+        fsx::write_atomic(&path, &bytes, true)
             .map_err(|e| format!("claim \"{id}\" not updated: {e}"))?;
         Ok(Value::obj(vec![
             ("id", Value::str(&claim.id)),
@@ -232,6 +286,7 @@ fn ls(a: &Args) -> Result<Value, String> {
         limit,
         offset,
         vec![("count", Value::uint(total))],
+        a,
     ))
 }
 
@@ -281,6 +336,7 @@ fn view(a: &Args) -> Result<Value, String> {
                     ("unverified", Value::uint(unverified)),
                 ]),
             )],
+            a,
         ))
     })
 }
@@ -318,12 +374,8 @@ fn page_args(a: &Args) -> Result<(Option<usize>, usize), String> {
     let offset = a.uint("offset").unwrap_or(0) as usize;
     let limit = match a.uint("limit") {
         None => None,
-        Some(0) => {
-            return Err("limit must be at least 1. Omit limit to return every claim.".into());
-        }
-        Some(n) if n > MAX_PAGE => {
-            return Err("limit is 500 at most. Pass offset to read the next page.".into());
-        }
+        Some(0) => return Err(crate::tool::LIMIT_RANGE.into()),
+        Some(n) if n > MAX_PAGE => return Err(crate::tool::LIMIT_RANGE.into()),
         Some(n) => Some(n as usize),
     };
     Ok((limit, offset))
@@ -347,6 +399,7 @@ fn finish_page(
     limit: Option<usize>,
     offset: usize,
     mut extra: Vec<(&str, Value)>,
+    args: &Args,
 ) -> Value {
     let listed = items.len() as u64;
     let (rows, truncated, next) = page(items, limit, offset);
@@ -359,25 +412,140 @@ fn finish_page(
             None => Value::Null,
         },
     ));
-    if let Some(hint) = page_hint(tool, limit, next, listed) {
+    if let Some(hint) = page_hint(tool, args, limit, next, listed) {
         extra.push(("hint", Value::str(hint)));
     }
     Value::obj(extra)
 }
 
-fn page_hint(tool: &str, limit: Option<usize>, next: Option<u64>, listed: u64) -> Option<String> {
-    if let Some(offset) = next {
-        let lim = limit.unwrap_or(LARGE_LIST as usize);
-        return Some(format!(
-            "next: {tool} with {{\"limit\":{lim},\"offset\":{offset}}}"
-        ));
+fn page_hint(
+    tool: &str,
+    args: &Args,
+    limit: Option<usize>,
+    next: Option<u64>,
+    listed: u64,
+) -> Option<String> {
+    let (offset, lim) = if let Some(offset) = next {
+        (offset, limit.unwrap_or(LARGE_LIST as usize))
+    } else if limit.is_none() && listed > LARGE_LIST {
+        (0, LARGE_LIST as usize)
+    } else {
+        return None;
+    };
+    let call = hint_call(tool, args, lim, offset);
+    if next.is_some() {
+        Some(format!("next: {call}"))
+    } else {
+        Some(format!(
+            "{listed} claims. Pass limit and offset to page, for example {call}."
+        ))
     }
-    if limit.is_none() && listed > LARGE_LIST {
-        return Some(format!(
-            "{listed} claims. Pass limit and offset to page, for example {tool} with {{\"limit\":100,\"offset\":0}}."
-        ));
+}
+
+fn hint_call(tool: &str, args: &Args, limit: usize, offset: u64) -> String {
+    let mut fields = Vec::new();
+    if let Some(id) = args.str("id") {
+        fields.push(format!("\"id\":\"{}\"", json_escape(id)));
     }
-    None
+    if let Some(verdict) = args.str("verdict") {
+        fields.push(format!("\"verdict\":\"{}\"", json_escape(verdict)));
+    }
+    let states = args.list("states");
+    if !states.is_empty() {
+        let items: Vec<String> = states
+            .iter()
+            .map(|state| format!("\"{}\"", json_escape(state)))
+            .collect();
+        fields.push(format!("\"states\":[{}]", items.join(",")));
+    }
+    if args.bool("compact") == Some(true) {
+        fields.push("\"compact\":true".to_string());
+    }
+    fields.push(format!("\"limit\":{limit}"));
+    fields.push(format!("\"offset\":{offset}"));
+    format!("{tool} with {{{}}}", fields.join(","))
+}
+
+fn json_escape(text: &str) -> String {
+    let mut out = String::new();
+    for ch in text.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            c if c.is_control() => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn check_tool(_a: &Args) -> Result<Value, String> {
+    store_check()
+}
+
+pub fn store_check() -> Result<Value, String> {
+    let store = Store::open()?;
+    crate::store::claims_ready(&store, false)?;
+    let mut problems = Vec::new();
+    let mut strays = Vec::new();
+    let dir = store.claims_dir();
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let path = entry.path();
+            if name.starts_with('.') && name.contains(".tmp-") {
+                strays.push(Value::String(name));
+                continue;
+            }
+            if name.starts_with('.') && name.ends_with(".md.lock") {
+                if fsx::lock_file_is_stale(&path) {
+                    problems.push(format!(
+                        "stale lock .adsertio/claims/{name}; the attach that held it did not finish. Remove that lock file, then retry adsertio_attach."
+                    ));
+                }
+                continue;
+            }
+            if name.starts_with('.') {
+                continue;
+            }
+            let slug = name.strip_suffix(".md");
+            let file = entry
+                .file_type()
+                .map(|kind| kind.is_file())
+                .unwrap_or(false);
+            if !file || slug.is_none_or(|id| !fsx::valid_slug(id)) {
+                problems.push(format!(
+                    ".adsertio/claims/{name} is not a claim file. Use a slug id ending in .md. It is left out of adsertio_ls."
+                ));
+            }
+        }
+    }
+    let claims = claim::load_all(&store)?;
+    for claim in &claims {
+        if !crate::fresh::valid_created(&claim.created) {
+            problems.push(format!(
+                "claim \"{}\" created time \"{}\" must be YYYY-MM-DDTHH:MM:SSZ",
+                claim.id, claim.created
+            ));
+        }
+        let viewed = verdict::view(&store.project, claim);
+        for evidence in &viewed.evidence {
+            if evidence.malformed {
+                problems.push(format!(
+                    "claim \"{}\" pointer {} has a malformed timestamp or commit",
+                    claim.id, evidence.pointer
+                ));
+            }
+        }
+    }
+    if !problems.is_empty() {
+        return Err(problems.join("\n"));
+    }
+    Ok(Value::obj(vec![
+        ("ok", Value::Bool(true)),
+        ("claims", Value::uint(claims.len() as u64)),
+        ("stray_temp_files", Value::Array(strays)),
+    ]))
 }
 
 fn guide(_a: &Args) -> Result<Value, String> {
@@ -413,13 +581,13 @@ fn guide(_a: &Args) -> Result<Value, String> {
         (
             "paging",
             Value::str(
-                "Omit limit and offset and adsertio_ls and adsertio_view return every matching claim. Pass limit (1 to 500) and offset to page. count and counts cover the whole store. When truncated is true, hint gives the next call and next_offset is the offset to pass.",
+                "Omit limit and offset and adsertio_ls and adsertio_view return every matching claim. Pass limit (1 to 500) and offset to page. count and counts cover the whole store. When truncated is true, hint gives the next call, including verdict, states, compact, and id when they were set, and next_offset is the offset to pass.",
             ),
         ),
         (
             "writes",
             Value::str(
-                "adsertio_claim never overwrites. Add pointers with adsertio_attach. A repeated pointer is an error and the file is left unchanged.",
+                "adsertio_claim never overwrites. Add pointers with adsertio_attach. A repeated pointer is an error and the file is left unchanged. A claim holds at most 50 pointers. The body is at most 20000 bytes. The claim file is at most 262144 bytes. Duplicate tags and evidence on a new claim are kept once.",
             ),
         ),
     ]))
