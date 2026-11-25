@@ -34,6 +34,23 @@ pub static TOOLS: &[Tool] = &[
         ],
         run: view,
     },
+    Tool {
+        name: "adsertio_attach",
+        group: "core",
+        description: "Add evidence pointers to an existing claim. The file is replaced whole. A bad pointer or a duplicate is rejected and the claim is left unchanged.",
+        params: &[
+            Param { name: "id", kind: Kind::Str, required: true, doc: "Claim id.", choices: &[] },
+            Param { name: "evidence", kind: Kind::StrList, required: true, doc: "Pointers to add, each tool:path[#selector]. Duplicates are an error.", choices: &[] },
+        ],
+        run: attach,
+    },
+    Tool {
+        name: "adsertio_ls",
+        group: "core",
+        description: "List claim ids, summaries, and how many pointers each has. Does not read the evidence and does not report a verdict; call adsertio_view for that.",
+        params: &[],
+        run: ls,
+    },
 ];
 
 fn claim_add(a: &Args) -> Result<Value, String> {
@@ -107,6 +124,77 @@ fn unique_id(dir: &std::path::Path, summary: &str) -> Result<String, String> {
         }
     }
     Err("could not find a free id; pass id".into())
+}
+
+fn attach(a: &Args) -> Result<Value, String> {
+    let store = Store::open()?;
+    let id = a.str("id").unwrap_or("");
+    let incoming: Vec<String> = a
+        .list("evidence")
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    if incoming.is_empty() {
+        return Err("evidence is empty; pass one or more pointers".into());
+    }
+    for pointer in &incoming {
+        claim::valid_pointer(pointer)?;
+    }
+    let mut seen = Vec::new();
+    for pointer in &incoming {
+        if seen.iter().any(|kept| kept == pointer) {
+            return Err(format!(
+                "evidence \"{}\" is repeated",
+                fsx::clip(pointer, 60)
+            ));
+        }
+        seen.push(pointer.clone());
+    }
+    let path = fsx::join_id(&store.claims_dir(), id, 1)?.with_extension("md");
+    let meta = match std::fs::symlink_metadata(&path) {
+        Ok(meta) => meta,
+        Err(_) => return Err(format!("no claim with id \"{}\"", fsx::clip(id, 60))),
+    };
+    if meta.file_type().is_symlink() || !meta.is_file() {
+        return Err(format!("{} is not a claim file", path.display()));
+    }
+    let text = fsx::read_strict(&path)?;
+    let mut claim = Claim::parse(id, &text)
+        .map_err(|e| format!("corrupt claim {id} ({}): {e}", path.display()))?;
+    for pointer in &incoming {
+        if claim.evidence.iter().any(|kept| kept == pointer) {
+            return Err(format!(
+                "evidence \"{}\" is already on claim \"{id}\"",
+                fsx::clip(pointer, 60)
+            ));
+        }
+    }
+    claim.evidence.extend(incoming);
+    fsx::write_atomic(&path, claim.render().as_bytes(), true)
+        .map_err(|e| format!("claim \"{id}\" not updated: {e}"))?;
+    Ok(Value::obj(vec![
+        ("id", Value::str(&claim.id)),
+        ("evidence", Value::uint(claim.evidence.len() as u64)),
+    ]))
+}
+
+fn ls(_a: &Args) -> Result<Value, String> {
+    let store = Store::open()?;
+    let claims = claim::load_all(&store)?;
+    let rows = claims
+        .iter()
+        .map(|claim| {
+            Value::obj(vec![
+                ("id", Value::str(&claim.id)),
+                ("summary", Value::str(&claim.summary)),
+                ("pointers", Value::uint(claim.evidence.len() as u64)),
+            ])
+        })
+        .collect();
+    Ok(Value::obj(vec![
+        ("claims", Value::Array(rows)),
+        ("count", Value::uint(claims.len() as u64)),
+    ]))
 }
 
 fn view(a: &Args) -> Result<Value, String> {
