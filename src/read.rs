@@ -83,7 +83,7 @@ pub struct TrammelText {
 
 pub fn load_trammel_text(project: &Path, rel: &str) -> Result<TrammelText, ReadError> {
     let path = open_contained(project, rel)?;
-    let parent = parent_dir(&path)?;
+    let parent = parent_dir(&project.join(rel))?;
     let _guard = lock_sibling(project, &parent, "lock")?;
     let bytes = read_bytes(&path, rel)?;
     if is_sqlite(&bytes) {
@@ -120,7 +120,7 @@ pub fn check_trammel_schema(doc: &Value, rel: &str) -> Result<(), ReadError> {
 /// SQLite check. Magic and compact tables are the caller's job.
 pub fn load_chisel_text(project: &Path, rel: &str) -> Result<String, ReadError> {
     let path = open_contained(project, rel)?;
-    let parent = parent_dir(&path)?;
+    let parent = parent_dir(&project.join(rel))?;
     let _guard = lock_sibling(project, &parent, "chisel.lock")?;
     let bytes = read_bytes(&path, rel)?;
     if is_sqlite(&bytes) {
@@ -164,7 +164,7 @@ pub fn read_json_file(path: &Path, label: &str, tool: &str) -> Result<Value, Rea
 /// [`ReadError::Unreadable`].
 pub fn read_chisel(project: &Path, rel: &str) -> Result<Snapshot, ReadError> {
     let path = open_contained(project, rel)?;
-    let parent = parent_dir(&path)?;
+    let parent = parent_dir(&project.join(rel))?;
     let _guard = lock_sibling(project, &parent, "chisel.lock")?;
     let bytes = read_bytes(&path, rel)?;
     if is_sqlite(&bytes) {
@@ -213,6 +213,8 @@ fn open_contained(project: &Path, rel: &str) -> Result<PathBuf, ReadError> {
     }
 }
 
+/// The folder of the path as the pointer names it, not of a symlink's target:
+/// the other tool keeps its lock and journal beside the name it writes.
 fn parent_dir(path: &Path) -> Result<PathBuf, ReadError> {
     path.parent()
         .map(Path::to_path_buf)

@@ -82,7 +82,7 @@ Pointers are `tool:path[#selector]`. The tool is `trammel`, `chisel`, or `probat
 | `trammel:.trammel/store#plan-<id>` | every step of the plan passed, and there is at least one |
 | `chisel:.chisel/store#test:<test_id>` | the latest result for that test passed |
 | `chisel:.chisel/store#file:<path>` | every test that touches that file last passed, and at least one does |
-| `probatio:<out>#survivors` (or no selector) | at least one mutant was killed and none survived |
+| `probatio:<out>#survivors` (or no selector) | at least one mutant was killed, none survived, none was `flaky` or `error`, and every mutant in the run has a result |
 | `probatio:<out>#mutant:<id>` | that mutant's outcome is `killed` |
 
 A pass recorded before the claim was written, or against a commit that is not `HEAD`, does not verify the claim. A failure still refutes it. `git rev-parse HEAD` is the only external program, and only for that check.

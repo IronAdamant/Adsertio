@@ -25,13 +25,16 @@ pub fn parse_after(raw: Option<&str>) -> Result<Option<(String, String)>, String
     let Some(raw) = raw else {
         return Ok(None);
     };
-    let Some((created, id)) = raw.split_once('/') else {
+    // The id is a slug, so the last `/` splits it off. `created` is matched as
+    // stored: a hand-written claim with a free-form time (which `check`
+    // reports) still hands out a cursor, and that cursor must work.
+    let Some((created, id)) = raw.rsplit_once('/') else {
         return Err(
             "after must look like 2020-01-01T00:00:00Z/claim-id. Pass the next_after value from the previous page."
                 .into(),
         );
     };
-    if !crate::fresh::valid_created(created) || !crate::fsx::valid_slug(id) {
+    if created.is_empty() || created.chars().any(char::is_control) || !crate::fsx::valid_slug(id) {
         return Err(
             "after must look like 2020-01-01T00:00:00Z/claim-id. Pass the next_after value from the previous page."
                 .into(),

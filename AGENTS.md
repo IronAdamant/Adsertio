@@ -52,5 +52,5 @@ cargo build --release --locked
 - `tests/hostile_input.rs`, `tests/claims_and_evidence.rs`,
   `tests/cli_and_groups.rs`, `tests/reader.rs`, `tests/trammel.rs`,
   `tests/chisel.rs`, `tests/probatio.rs`, `tests/fresh.rs`, `tests/attach_ls.rs`,
-  `tests/load.rs`:
+  `tests/load.rs`, `tests/review4.rs`:
   the failure modes the design avoids. Keep them passing.

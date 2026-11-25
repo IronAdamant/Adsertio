@@ -13,7 +13,9 @@ use std::sync::Arc;
 
 type TrammelHit = Result<Arc<trammel_idx::Index>, ReadError>;
 type ChiselHit = Result<Arc<chisel_idx::Index>, ReadError>;
-type RunHit = Result<Option<Arc<Vec<String>>>, ReadError>;
+/// Each result as (mutant id, outcome).
+pub type RunRows = Vec<(String, String)>;
+type RunHit = Result<Option<Arc<RunRows>>, ReadError>;
 type HeadHit = Result<String, String>;
 
 thread_local! {
@@ -93,8 +95,8 @@ fn remember<T>(
 pub fn probatio(
     project: &Path,
     rel: &str,
-    load: impl FnOnce() -> Result<Option<Vec<String>>, ReadError>,
-) -> Result<Option<Arc<Vec<String>>>, ReadError> {
+    load: impl FnOnce() -> Result<Option<RunRows>, ReadError>,
+) -> RunHit {
     if !ON.with(|flag| flag.get()) {
         return load().map(|rows| rows.map(Arc::new));
     }

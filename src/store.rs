@@ -58,8 +58,10 @@ impl Store {
                 ))
             }
         }
+        // `.adsertio` has the parent "", which names no folder.
         let project = dir
             .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         Ok(Store { dir, project })

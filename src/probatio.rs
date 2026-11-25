@@ -7,6 +7,10 @@
 //! least one mutant was killed and none survived. `timeout`, `no coverage`,
 //! and `unviable` (including `killed` with `cause` `build`) do not survive
 //! and do not kill. On their own, with no kill and no survivor, the run is
+//! inconclusive. `flaky` and `error` block a pass: the run is inconclusive.
+//! An outcome Probatio does not write makes the run unreadable. When
+//! `run.json` names a mutant list inside the project, a pass also needs a
+//! result for every mutant in it: a run still going, or a capped run, is
 //! inconclusive. One broken results file makes the run unreadable; it is not
 //! dropped. `#ledger` counts entries and is never a pass: an unchecked ledger
 //! is not proof.
@@ -20,8 +24,23 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 struct Mutant {
+    id: String,
     outcome: String,
 }
+
+/// Every outcome Probatio writes (`Verdict::as_str` in Probatio).
+const KNOWN_OUTCOMES: &[&str] = &[
+    "killed",
+    "survived",
+    "timeout",
+    "no coverage",
+    "unviable",
+    "flaky",
+    "error",
+];
+
+/// Outcomes that mean the run did not settle that mutant.
+const BLOCKING_OUTCOMES: &[&str] = &["flaky", "error"];
 
 pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
     if let Err(text) = claim::valid_pointer(pointer) {
@@ -91,12 +110,19 @@ fn file_instead_of_folder(project: &Path, pointer: &str, rel: &str) -> Evidence 
 
 fn whole_run(project: &Path, pointer: &str, rel: &str, out_dir: &Path) -> Evidence {
     let loaded = match crate::cache::probatio(project, rel, || {
-        load_results(project, rel, out_dir)
-            .map(|rows| rows.map(|items| items.into_iter().map(|item| item.outcome).collect()))
+        load_results(project, rel, out_dir).map(|rows| {
+            rows.map(|items| {
+                items
+                    .into_iter()
+                    .map(|item| (item.id, item.outcome))
+                    .collect()
+            })
+        })
     }) {
         Ok(rows) => rows.map(|arc| {
             arc.iter()
-                .map(|outcome| Mutant {
+                .map(|(id, outcome)| Mutant {
+                    id: id.clone(),
                     outcome: outcome.clone(),
                 })
                 .collect::<Vec<_>>()
@@ -139,11 +165,144 @@ fn whole_run(project: &Path, pointer: &str, rel: &str, out_dir: &Path) -> Eviden
         detail.push_str(&tally.text);
     }
     if survivors > 0 {
-        evidence(pointer, State::Fail, detail)
-    } else if killed > 0 {
+        return evidence(pointer, State::Fail, detail);
+    }
+    if let Some(odd) = rows
+        .iter()
+        .find(|row| !KNOWN_OUTCOMES.contains(&row.outcome.as_str()))
+    {
+        return evidence(
+            pointer,
+            State::Unreadable,
+            format!(
+                "{detail}; outcome \"{}\" is not one Probatio writes, so the run is not proof",
+                fsx::clip(&odd.outcome, 40)
+            ),
+        );
+    }
+    let blocking: usize = BLOCKING_OUTCOMES.iter().map(|o| count(&rows, o)).sum();
+    if blocking > 0 {
+        return evidence(
+            pointer,
+            State::Inconclusive,
+            format!("{detail}; a flaky or error result did not settle its mutant"),
+        );
+    }
+    match planned(project, rel, &rows) {
+        Plan::Waiting { done, total } => {
+            return evidence(
+                pointer,
+                State::Inconclusive,
+                format!("{detail}; {done} of {total} mutants in the run have a result, so the run may be unfinished or capped"),
+            )
+        }
+        Plan::Unreadable(why) => {
+            return evidence(
+                pointer,
+                State::Inconclusive,
+                format!("{detail}; cannot tell whether the run finished: {why}"),
+            )
+        }
+        Plan::Complete | Plan::NotChecked => {}
+    }
+    if killed > 0 {
         evidence(pointer, State::Pass, detail)
     } else {
         evidence(pointer, State::Inconclusive, detail)
+    }
+}
+
+enum Plan {
+    /// Every mutant in the run's list has a result.
+    Complete,
+    Waiting {
+        done: usize,
+        total: usize,
+    },
+    /// `run.json` is there but cannot be read.
+    Unreadable(String),
+    /// No `run.json`, or its mutant list is outside the project.
+    NotChecked,
+}
+
+/// Compare the results with the mutant list `run.json` names, the same check
+/// Probatio's tally makes. Only a list inside the project is read.
+fn planned(project: &Path, rel: &str, rows: &[Mutant]) -> Plan {
+    let run_rel = format!("{rel}/run.json");
+    let run = match read::read_json(project, &run_rel, "probatio") {
+        Ok(value) => value,
+        Err(ReadError::Missing(_)) => return Plan::NotChecked,
+        Err(ReadError::Unreadable(text)) if text.ends_with("does not exist") => {
+            return Plan::NotChecked
+        }
+        Err(ReadError::Unreadable(text)) => return Plan::Unreadable(text),
+    };
+    let patches = match run.get("patches") {
+        Some(Value::Array(items)) => items.first().and_then(Value::as_str),
+        Some(Value::String(path)) => Some(path.as_str()),
+        _ => None,
+    };
+    let Some(patches) = patches else {
+        return Plan::NotChecked;
+    };
+    let Some(list_rel) = inside_project(project, patches) else {
+        return Plan::NotChecked;
+    };
+    let list_rel = match fsx::project_file(project, &list_rel) {
+        Ok(path) if path.is_dir() => format!("{list_rel}/mutants.json"),
+        Ok(_) => list_rel,
+        Err(_) => return Plan::NotChecked,
+    };
+    let list = match read::read_json(project, &list_rel, "probatio") {
+        Ok(value) => value,
+        Err(ReadError::Missing(_)) => return Plan::NotChecked,
+        Err(ReadError::Unreadable(text)) if text.ends_with("does not exist") => {
+            return Plan::NotChecked
+        }
+        Err(ReadError::Unreadable(text)) => return Plan::Unreadable(text),
+    };
+    let items = match &list {
+        Value::Array(items) => items,
+        Value::Object(_) => match list.get("mutants").and_then(Value::as_array) {
+            Some(items) => items,
+            None => return Plan::Unreadable(format!("{list_rel} has no mutants list")),
+        },
+        _ => return Plan::Unreadable(format!("{list_rel} is not a mutant list")),
+    };
+    let mut total = 0;
+    let mut done = 0;
+    for item in items {
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            return Plan::Unreadable(format!("{list_rel} has a mutant with no id"));
+        };
+        total += 1;
+        if rows.iter().any(|row| row.id == id) {
+            done += 1;
+        }
+    }
+    if done < total {
+        Plan::Waiting { done, total }
+    } else {
+        Plan::Complete
+    }
+}
+
+/// A path from `run.json` as a project-relative path, when it is inside the
+/// project. Probatio writes absolute paths; a relative one is taken from the
+/// project folder.
+fn inside_project(project: &Path, path: &str) -> Option<String> {
+    let p = Path::new(path);
+    if !p.is_absolute() {
+        return Some(path.trim_start_matches("./").to_string());
+    }
+    let root = project.canonicalize().ok()?;
+    let canon = p.canonicalize().ok()?;
+    let rel = canon.strip_prefix(&root).ok()?;
+    let text = rel.to_str()?.replace('\\', "/");
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
     }
 }
 
@@ -179,10 +338,18 @@ fn one_mutant(project: &Path, pointer: &str, rel: &str, id: &str) -> Evidence {
             State::Fail,
             format!("mutant {id} outcome is survived"),
         ),
-        other => evidence(
+        other if KNOWN_OUTCOMES.contains(&other) => evidence(
             pointer,
             State::Inconclusive,
             format!("mutant {id} outcome \"{other}\" is not a kill and not a survivor"),
+        ),
+        other => evidence(
+            pointer,
+            State::Unreadable,
+            format!(
+                "mutant {id} outcome \"{}\" is not one Probatio writes",
+                fsx::clip(other, 40)
+            ),
         ),
     }
 }
@@ -333,7 +500,8 @@ fn load_results(
         };
         let outcome = outcome_of(&value)
             .map_err(|text| ReadError::Unreadable(format!("{rel_file} {text}")))?;
-        rows.push(Mutant { outcome });
+        let id = name.trim_end_matches(".json").to_string();
+        rows.push(Mutant { id, outcome });
     }
     Ok(Some(rows))
 }

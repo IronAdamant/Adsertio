@@ -20,7 +20,8 @@ does not understand is `unreadable` or `no_adapter`, never `pass`.
 - The **project** is the folder that holds `.adsertio/`. Evidence paths are
   resolved inside it.
 - `<id>` is a slug: `[a-z0-9][a-z0-9-]*`, at most 64 bytes, one segment.
-- A symlink in the claims folder, or any file that is not `<id>.md`, is an error.
+- A symlink in the claims folder, or any file that is not `<id>.md`, is an
+  error for `check`. `view` and `ls` leave it out and warn on stderr.
 
 ## 2. Claims
 
@@ -71,18 +72,26 @@ Ids in Trammel selectors are the row `id`, not `step_index`.
 | same | `failure-<id>` | the row exists | this selector does not fail | no such row: `missing` |
 | `chisel:.chisel/store` | `test:<test_id>` | the latest `test_results` row has `passed` true | the latest row has `passed` false | no row: `missing` |
 | same | `file:<path>` | at least one `test_edges` row points at the file, and every such test last passed | any such test's latest result failed | a touching test has no result, or no edge touches the file: `missing` |
-| `probatio:<out-dir>` | none, or `survivors` | at least one `killed` and zero `survived` | any result is `survived` | only `timeout`, `no coverage`, or `unviable`, or no results file and only a tally: `inconclusive` |
-| same | `mutant:<id>` | `results/<id>.json` has outcome `killed` | outcome `survived` | any other outcome: `inconclusive` |
+| `probatio:<out-dir>` | none, or `survivors` | at least one `killed`, zero `survived`, no `flaky` or `error`, and a result for every mutant in the run's list | any result is `survived` | only `timeout`, `no coverage`, or `unviable`; any `flaky` or `error`; fewer results than the run's list; a `run.json` that cannot be read; or no results file and only a tally: `inconclusive`. An outcome Probatio does not write: `unreadable` |
+| same | `mutant:<id>` | `results/<id>.json` has outcome `killed` | outcome `survived` | another Probatio outcome: `inconclusive`. An outcome Probatio does not write: `unreadable` |
 | same | `ledger` | never | never | `inconclusive`, with the entry count |
 
 `killed` with `cause` `build` is `unviable`. It is not a kill and not a survivor.
+The outcomes Probatio writes are `killed`, `survived`, `timeout`,
+`no coverage`, `unviable`, `flaky`, and `error`, matched exactly. When
+`<out-dir>/run.json` names its patches (`patches`, a path or the first of a
+list) inside the project, the mutant list there (`mutants.json` in a folder,
+or the file itself) is compared with `results/`, as Probatio's tally does. A
+list outside the project, or no `run.json`, is not checked.
 
 A `file:` path matches a `code_id` when the code id is exactly that path, or
 starts with `path:` or `path/`. `src/a.rs` does not match `src/a.rs2:...`.
 The latest Chisel result is the last row in the snapshot. `tests/a.rs::name`
 and `tests/a.rs:name` are the same id.
 
-When the pointer is exactly `.chisel/store` and `.chisel/shards/` exists, each
+When the pointer names the root store, however it is spelt (`./`, `//`, `.`,
+or a symlinked folder, compared by resolved path), and `.chisel/shards/`
+exists, each
 shard snapshot (including `_unassigned`) is read too. A pointer at one shard
 reads only that file. A pointer under `.chisel/overlays/` is `no_adapter`:
 worktree overlays are not read. A damaged shard makes the root pointer
@@ -98,7 +107,9 @@ Each non-empty journal line must be JSON with `schema_version`. The last such
 line replaces the snapshot. A snapshot that is not valid JSON is `unreadable`,
 not an empty plan list, even if a journal sits beside it. After the journal,
 `schema_version` must be 1. If `.trammel/lock` exists, the reader takes a
-shared lock and does not wait: a held lock is `unreadable`.
+shared lock and does not wait: a held lock is `unreadable`. The lock and the
+journal are looked for beside the store path as the pointer names it, not
+beside a symlink's target.
 
 **Chisel.** `.chisel/store` must have `"magic": "chisel-store"` and
 `"version": 1`. `test_edges` and `blame` may be stored as compact tables
@@ -181,7 +192,10 @@ file fails the whole view and the whole list. It is not left out.
   page exists, and that claim is not added to `counts`.
 - Claims are ordered by `created`, then by id, with number runs compared as
   integers (`c2` before `c10`). `after` is the `created/id` value in
-  `next_after`. The next page starts strictly after that claim, so a verdict
+  `next_after`, split at the last `/`. `created` is matched as stored, so a
+  cursor from a hand-written time that `check` reports still works. Times
+  have one-second resolution: a claim created later in the same second as
+  the cursor, with an id that sorts before it, is not reached by that cursor. The next page starts strictly after that claim, so a verdict
   that changes on an earlier claim does not skip a later one. `offset` still
   skips that many matches from the start of this call and can skip a claim
   when a verdict changes between pages. When `truncated` is true, `hint` names
@@ -202,7 +216,10 @@ file fails the whole view and the whole list. It is not left out.
   removed at once. A couple of seconds ahead is treated as clock skew while
   the pid line is written. A live pid is kept: the call waits 5 seconds and
   then fails, and the file is unchanged. A future mtime does not keep a dead
-  lock.
+  lock. Only the holder of the `<lock>.break` guard removes a dead lock, after
+  judging it again while holding the guard, so a lock taken a moment later is
+  never removed. A holder removes its lock only while the file still holds
+  the line it wrote.
 - A pointer path with a backslash, a drive letter, a leading slash, or `..` is
   an error at `adsertio_claim` and `adsertio_attach`. Use a relative path with
   forward slashes inside the project.

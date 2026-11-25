@@ -486,9 +486,7 @@ pub fn store_check() -> Result<Value, String> {
                 continue;
             }
             if name.starts_with('.') && name.ends_with(".md.lock") {
-                if fsx::lock_file_is_stale(&path) {
-                    let _ = std::fs::remove_file(&path);
-                }
+                fsx::break_abandoned_lock(&path);
                 continue;
             }
             if name.starts_with('.') {

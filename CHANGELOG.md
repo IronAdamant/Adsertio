@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.2.1
+
+Same claim format as 1.2.0. Fixes from the fifth review. A few runs that 1.2.0
+called verified are now unverified, which is the point.
+
+- A Chisel root store pointer spelt `.chisel/./store`, `.chisel//store`, or
+  through a symlinked folder skipped the shards, so a failing shard result was
+  hidden and the claim could read verified. The root is recognised by its
+  resolved path.
+- A Probatio run passed with `flaky` or `error` results, with an outcome
+  Probatio does not write (`Survived`, `survived `), or with only some of its
+  mutants finished. `flaky` and `error` now make the run inconclusive, an
+  unknown outcome makes it unreadable, and when `run.json` names a mutant list
+  inside the project, a pass needs a result for every mutant in it.
+- Breaking a dead attach lock could let two attaches in at once, and the
+  holder's cleanup could delete the next holder's lock. Only the holder of a
+  `.break` guard removes a dead lock now, and a holder removes only the lock
+  line it wrote. `check` removes dead locks the same way.
+- `ADSERTIO_DIR=.adsertio` (one relative part) made every pointer
+  unreadable. The project is the working folder in that case.
+- A claim with a hand-written `created` time handed out a `next_after` cursor
+  that `after` refused. The cursor now matches `created` as stored.
+- The Trammel lock and journal were looked for beside a symlinked store's
+  target instead of beside `.trammel/store`, so a newer journal could be
+  missed. They are read beside the path as written.
+- A Chisel `file:` detail listed every waiting or failed test (hundreds on a
+  real store). It lists ten and says how many more.
+- SPEC now says what the code does with a stray file in the claims folder:
+  `view` and `ls` warn and leave it out, and `check` fails.
+
 ## 1.2.0
 
 The fourth stress test. A page no longer walks every claim against every evidence row. A Trammel or Chisel snapshot is indexed once per call. On this machine a 20,000-claim page that took 249 s in 1.1.1 took 0.48 s, and the full view of that store took 0.50 s. RSS for the 14.9 MiB plus 11.5 MiB pair dropped from 238 MiB to 72 MiB. The re-measure, including what did not get cheaper, is in `docs/perf/1.2.0.md`.

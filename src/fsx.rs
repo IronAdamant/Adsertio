@@ -32,12 +32,48 @@ const CLOCK_SKEW: std::time::Duration = std::time::Duration::from_secs(2);
 
 struct HeldLock {
     path: PathBuf,
+    /// The line this holder wrote. The name is removed only while it still
+    /// holds this line, so a lock another writer took over is left alone.
+    text: String,
 }
 
 impl Drop for HeldLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        if fs::read_to_string(&self.path).is_ok_and(|t| t == self.text) {
+            let _ = fs::remove_file(&self.path);
+        }
     }
+}
+
+/// How long a `.break` guard may stay before it counts as abandoned.
+/// Breaking takes microseconds; only a writer killed mid-break leaves one.
+const BREAK_STALE: u64 = 5;
+
+/// Remove `lock` when no live writer holds it, and say whether it was removed.
+/// Only the holder of the `.break` guard beside it removes, after judging the
+/// lock again while holding the guard. The lock name cannot be created while
+/// the old file is there, so the file judged abandoned is the file removed: a
+/// lock taken a moment after another contender's check is never deleted.
+pub fn break_abandoned_lock(lock: &Path) -> bool {
+    if !lock.exists() || lock_held(lock) {
+        return false;
+    }
+    let mut guard = lock.as_os_str().to_owned();
+    guard.push(".break");
+    let guard = PathBuf::from(guard);
+    let held = match OpenOptions::new().write(true).create_new(true).open(&guard) {
+        Ok(file) => file,
+        Err(_) => {
+            if matches!(file_age(&guard), Age::Secs(secs) if secs > BREAK_STALE) {
+                let _ = fs::remove_file(&guard);
+            }
+            return false;
+        }
+    };
+    let removed = lock.exists() && !lock_held(lock) && fs::remove_file(lock).is_ok();
+    drop(held);
+    let _ = fs::remove_file(&guard);
+    removed
 }
 
 /// Hold an exclusive lock file for a read-modify-write.
@@ -58,26 +94,28 @@ pub fn with_claim_lock<T>(
     loop {
         match OpenOptions::new().write(true).create_new(true).open(lock) {
             Ok(mut file) => {
-                let _ = writeln!(
-                    file,
-                    "{} {}",
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default();
+                let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+                let text = format!(
+                    "{} {} {:x}-{n}\n",
                     std::process::id(),
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0)
+                    now.as_secs(),
+                    now.as_nanos()
                 );
+                let _ = file.write_all(text.as_bytes());
                 let _ = file.sync_all();
                 let held = HeldLock {
                     path: lock.to_path_buf(),
+                    text,
                 };
                 let result = body();
                 drop(held);
                 return result;
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                if !lock_held(lock) {
-                    let _ = fs::remove_file(lock);
+                if break_abandoned_lock(lock) {
                     continue;
                 }
                 if started.elapsed() >= LOCK_WAIT {
@@ -448,6 +486,43 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn racing_past_a_dead_attach_lock_leaves_one_holder() {
+        use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
+        let d = std::env::temp_dir().join(format!("adsertio-fsx-dead-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let lock = d.join(".c.md.lock");
+        for _ in 0..12 {
+            fs::write(&lock, "999999 0\n").unwrap();
+            let inside = std::sync::Arc::new(AtomicU64::new(0));
+            let most = std::sync::Arc::new(AtomicU64::new(0));
+            let gate = std::sync::Arc::new(std::sync::Barrier::new(6));
+            let handles: Vec<_> = (0..6)
+                .map(|_| {
+                    let (lock, inside, most, gate) =
+                        (lock.clone(), inside.clone(), most.clone(), gate.clone());
+                    std::thread::spawn(move || {
+                        gate.wait();
+                        with_claim_lock(&lock, || {
+                            most.fetch_max(inside.fetch_add(1, SeqCst) + 1, SeqCst);
+                            std::thread::sleep(std::time::Duration::from_millis(30));
+                            inside.fetch_sub(1, SeqCst);
+                            Ok(())
+                        })
+                        .unwrap();
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().unwrap();
+            }
+            assert_eq!(most.load(SeqCst), 1, "two attach holders at once");
+            assert!(!lock.exists());
+        }
+        let _ = fs::remove_dir_all(&d);
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("fsx-{name}-{}", std::process::id()));

@@ -97,10 +97,34 @@ fn is_overlay(rel: &str) -> bool {
     parts.windows(2).any(|pair| pair == [".chisel", "overlays"])
 }
 
-fn is_root_store(rel: &str) -> bool {
+/// The root store, however the pointer spells it (`./`, `//`, `.`, or a
+/// symlinked folder): the shards merge into it, so a failing shard result is
+/// never hidden.
+fn is_root_store(project: &Path, rel: &str) -> bool {
     let norm = rel.replace('\\', "/");
-    let norm = norm.trim_start_matches("./");
-    norm == ".chisel/store"
+    if norm.trim_start_matches("./") == ".chisel/store" {
+        return true;
+    }
+    match (
+        project.join(rel).canonicalize(),
+        project.join(".chisel").join("store").canonicalize(),
+    ) {
+        (Ok(named), Ok(root)) => named == root,
+        _ => false,
+    }
+}
+
+/// At most ten names, then how many more, so one pointer's detail stays short.
+fn some(names: &[&str]) -> String {
+    const SHOWN: usize = 10;
+    if names.len() <= SHOWN {
+        return names.join(", ");
+    }
+    format!(
+        "{} and {} more",
+        names[..SHOWN].join(", "),
+        names.len() - SHOWN
+    )
 }
 
 fn parse_selector(selector: &str) -> Result<Sel, String> {
@@ -124,7 +148,7 @@ fn parse_selector(selector: &str) -> Result<Sel, String> {
 
 fn load_index(project: &Path, rel: &str) -> Result<crate::chisel_idx::Index, ReadError> {
     let mut index = crate::chisel_idx::parse_file(project, rel)?;
-    if !is_root_store(rel) {
+    if !is_root_store(project, rel) {
         return Ok(index);
     }
     for rel_store in shard_stores(project)? {
@@ -262,16 +286,13 @@ fn file_state(
     if !failed.is_empty() {
         Ok((
             State::Fail,
-            format!("tests touching {file} failed: {}", failed.join(", ")),
+            format!("tests touching {file} failed: {}", some(&failed)),
             stamp,
         ))
     } else if !waiting.is_empty() {
         Ok((
             State::Missing,
-            format!(
-                "tests touching {file} have no result: {}",
-                waiting.join(", ")
-            ),
+            format!("tests touching {file} have no result: {}", some(&waiting)),
             stamp,
         ))
     } else {
