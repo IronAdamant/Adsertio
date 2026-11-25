@@ -28,6 +28,9 @@ pub enum State {
     /// The file was read and it is neither a pass nor a fail: a mutation
     /// timeout, a run with no kill and no survivor, or an unchecked ledger.
     Inconclusive,
+    /// A pass that is too old, or tied to a commit that is not HEAD.
+    /// Only a pass is downgraded; a failure stays a failure.
+    Stale,
 }
 
 impl State {
@@ -39,6 +42,7 @@ impl State {
             State::Unreadable => "unreadable",
             State::NoAdapter => "no_adapter",
             State::Inconclusive => "inconclusive",
+            State::Stale => "stale",
         }
     }
 }
@@ -48,6 +52,10 @@ pub struct Evidence {
     pub pointer: String,
     pub state: State,
     pub detail: String,
+    /// Unix seconds on the evidence, when it names a time. The oldest one.
+    pub at: Option<f64>,
+    /// Commits the evidence names. Empty when it names none.
+    pub commits: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -84,6 +92,8 @@ pub fn read_evidence(project: &Path, pointer: &str) -> Evidence {
         pointer: pointer.to_string(),
         state,
         detail,
+        at: None,
+        commits: Vec::new(),
     };
     if let Err(e) = claim::valid_pointer(pointer) {
         return mk(State::Unreadable, e);
@@ -151,11 +161,14 @@ pub struct View {
 }
 
 pub fn view(project: &Path, claim: &Claim) -> View {
-    let evidence: Vec<Evidence> = claim
+    let mut evidence: Vec<Evidence> = claim
         .evidence
         .iter()
         .map(|p| read_evidence(project, p))
         .collect();
+    for item in &mut evidence {
+        crate::fresh::apply(project, &claim.created, item);
+    }
     let states: Vec<State> = evidence.iter().map(|e| e.state).collect();
     View {
         verdict: combine(&states),
@@ -217,6 +230,8 @@ mod tests {
             combine(&[State::Fail, State::Inconclusive]),
             Verdict::Refuted
         );
+        assert_eq!(combine(&[State::Stale]), Verdict::Unverified);
+        assert_eq!(combine(&[State::Fail, State::Stale]), Verdict::Refuted);
     }
 
     #[test]

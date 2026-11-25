@@ -62,6 +62,8 @@ fn evidence(pointer: &str, state: State, detail: impl Into<String>) -> Evidence 
         pointer: pointer.to_string(),
         state,
         detail: detail.into(),
+        at: None,
+        commits: Vec::new(),
     }
 }
 

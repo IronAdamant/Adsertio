@@ -60,8 +60,16 @@ pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
         Ok(sel) => sel,
         Err(text) => return evidence(pointer, State::Unreadable, text),
     };
+    let (at, commits) = freshness(&docs, &sel);
     match judge(&docs, sel) {
-        Ok((state, detail)) => evidence(pointer, state, detail),
+        Ok((state, detail)) => {
+            let mut found = evidence(pointer, state, detail);
+            if found.state == State::Pass {
+                found.at = at;
+                found.commits = commits;
+            }
+            found
+        }
         Err(text) => evidence(pointer, State::Unreadable, text),
     }
 }
@@ -71,6 +79,8 @@ fn evidence(pointer: &str, state: State, detail: impl Into<String>) -> Evidence 
         pointer: pointer.to_string(),
         state,
         detail: detail.into(),
+        at: None,
+        commits: Vec::new(),
     }
 }
 
@@ -307,6 +317,91 @@ fn file_state(docs: &[Value], file: &str) -> Result<(State, String), String> {
                 ids.len()
             ),
         ))
+    }
+}
+
+fn freshness(docs: &[Value], sel: &Sel) -> (Option<f64>, Vec<String>) {
+    match sel {
+        Sel::Test(id) => {
+            let Ok(rows) = table(docs, "test_results") else {
+                return (None, Vec::new());
+            };
+            let Some(row) = latest(&rows, id) else {
+                return (None, Vec::new());
+            };
+            (
+                row.get("recorded_at").and_then(Value::as_f64),
+                commits_for(docs, id, row),
+            )
+        }
+        Sel::File(path) => {
+            let Ok(edges) = table(docs, "test_edges") else {
+                return (None, Vec::new());
+            };
+            let Ok(rows) = table(docs, "test_results") else {
+                return (None, Vec::new());
+            };
+            let mut ids = Vec::new();
+            for edge in edges {
+                let Some(code_id) = edge.get("code_id").and_then(Value::as_str) else {
+                    continue;
+                };
+                if !file_matches(code_id, path) {
+                    continue;
+                }
+                if let Some(test_id) = edge.get("test_id").and_then(Value::as_str) {
+                    let test_id = normalize_test_id(test_id);
+                    if !ids.iter().any(|known| known == &test_id) {
+                        ids.push(test_id);
+                    }
+                }
+            }
+            let mut at = None;
+            let mut commits = Vec::new();
+            for id in ids {
+                if let Some(row) = latest(&rows, &id) {
+                    at = older(at, row.get("recorded_at").and_then(Value::as_f64));
+                    commits.extend(commits_for(docs, &id, row));
+                }
+            }
+            (at, commits)
+        }
+    }
+}
+
+fn commits_for(docs: &[Value], id: &str, row: &Value) -> Vec<String> {
+    if let Some(text) = commit_text(row.get("commit")) {
+        return vec![text];
+    }
+    let want = normalize_test_id(id);
+    for doc in docs {
+        let Some(Value::Object(pairs)) = doc.get("test_passes") else {
+            continue;
+        };
+        for (key, value) in pairs {
+            if normalize_test_id(key) == want {
+                if let Some(text) = commit_text(value.get("commit")) {
+                    return vec![text];
+                }
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn commit_text(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+fn older(left: Option<f64>, right: Option<f64>) -> Option<f64> {
+    match (left, right) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), None) => Some(a),
+        (None, b) => b,
     }
 }
 

@@ -47,8 +47,16 @@ pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
         Ok(sel) => sel,
         Err(text) => return evidence(pointer, State::Unreadable, text),
     };
+    let (at, commits) = freshness(&doc, &sel);
     match judge(&doc, sel) {
-        Ok((state, detail)) => evidence(pointer, state, detail),
+        Ok((state, detail)) => {
+            let mut found = evidence(pointer, state, detail);
+            if found.state == State::Pass {
+                found.at = at;
+                found.commits = commits;
+            }
+            found
+        }
         Err(text) => evidence(pointer, State::Unreadable, text),
     }
 }
@@ -58,6 +66,8 @@ fn evidence(pointer: &str, state: State, detail: impl Into<String>) -> Evidence 
         pointer: pointer.to_string(),
         state,
         detail: detail.into(),
+        at: None,
+        commits: Vec::new(),
     }
 }
 
@@ -226,6 +236,63 @@ fn constraint_state(doc: &Value, id: i64) -> Result<(State, String), String> {
         Some(Value::Bool(false)) => Ok((State::Fail, format!("constraint {id} is inactive"))),
         Some(_) => Err(format!("constraint {id} active is not a boolean")),
     }
+}
+
+fn freshness(doc: &Value, sel: &Sel) -> (Option<f64>, Vec<String>) {
+    match sel {
+        Sel::Step { plan, step } => {
+            let Ok(steps) = rows(doc, "steps") else {
+                return (None, Vec::new());
+            };
+            let Some(row) = steps
+                .into_iter()
+                .find(|row| id_is(row, "id", *step) && id_is(row, "plan_id", *plan))
+            else {
+                return (None, Vec::new());
+            };
+            stamp(row.get("verification"))
+        }
+        Sel::Plan(plan) => {
+            let Ok(steps) = rows(doc, "steps") else {
+                return (None, Vec::new());
+            };
+            let mut at = None;
+            let mut commits = Vec::new();
+            for row in steps.into_iter().filter(|row| id_is(row, "plan_id", *plan)) {
+                let (step_at, step_commits) = stamp(row.get("verification"));
+                at = older(at, step_at);
+                commits.extend(step_commits);
+            }
+            (at, commits)
+        }
+        Sel::Constraint(_) | Sel::Failure(_) => (None, Vec::new()),
+    }
+}
+
+fn stamp(value: Option<&Value>) -> (Option<f64>, Vec<String>) {
+    let Some(value) = value else {
+        return (None, Vec::new());
+    };
+    let commits = commit_text(value.get("commit"))
+        .map(|text| vec![text])
+        .unwrap_or_default();
+    (value.get("at").and_then(Value::as_f64), commits)
+}
+
+fn older(left: Option<f64>, right: Option<f64>) -> Option<f64> {
+    match (left, right) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), None) => Some(a),
+        (None, b) => b,
+    }
+}
+
+fn commit_text(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
 }
 
 fn failure_state(doc: &Value, id: i64) -> Result<(State, String), String> {

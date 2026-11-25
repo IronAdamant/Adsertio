@@ -5,6 +5,7 @@
 pub mod chisel;
 pub mod claim;
 pub mod cli;
+pub mod fresh;
 pub mod fsx;
 pub mod groups;
 pub mod json;
