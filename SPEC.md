@@ -158,7 +158,8 @@ file fails the whole view and the whole list. It is not left out.
 - `adsertio_claim` `{summary, evidence?, author?, body?, id?, tags?}` returns
   `{id, evidence}`. Without `id`, one is made from the summary. Never overwrites.
 - `adsertio_attach` `{id, evidence}` adds pointers to an existing claim and
-  returns `{id, evidence}` (the new count). A bad pointer, an empty list, or a
+  returns `{id, evidence, added}`. `evidence` is still the new count. `added`
+  is the pointers this call wrote, in order. A bad pointer, an empty list, or a
   duplicate (in the request, or already on the claim) is an error and writes
   nothing. Only that claim file is replaced.
 - `adsertio_view` `{id?, verdict?, states?, compact?, limit?, offset?}` returns

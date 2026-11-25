@@ -203,6 +203,10 @@ fn attach(a: &Args) -> Result<Value, String> {
         Ok(Value::obj(vec![
             ("id", Value::str(&claim.id)),
             ("evidence", Value::uint(claim.evidence.len() as u64)),
+            (
+                "added",
+                Value::Array(incoming.iter().map(|p| Value::str(p.as_str())).collect()),
+            ),
         ]))
     })
 }
@@ -400,6 +404,8 @@ fn guide(_a: &Args) -> Result<Value, String> {
                 Value::str("chisel:.chisel/store#test:<test_id>"),
                 Value::str("chisel:.chisel/store#file:<path>"),
                 Value::str("probatio:<out-dir>"),
+                Value::str("probatio:<out-dir>#survivors"),
+                Value::str("probatio:out/run#survivors"),
                 Value::str("probatio:<out-dir>#mutant:<id>"),
                 Value::str("probatio:<out-dir>#ledger"),
             ]),

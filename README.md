@@ -108,7 +108,7 @@ Claude Code (`.mcp.json`) or Cursor (`.cursor/mcp.json`):
 | Tool | Does |
 |---|---|
 | `adsertio_claim` | Record a claim. Never overwrites. |
-| `adsertio_attach` | Add pointers to an existing claim. A bad or duplicate pointer writes nothing. |
+| `adsertio_attach` | Add pointers to an existing claim. Returns the new count and the pointers just added. A bad or duplicate pointer writes nothing. |
 | `adsertio_view` | Verdict and the state of every pointer. One page. |
 | `adsertio_ls` | Id, summary, and pointer count. No verdict. One page. |
 | `adsertio_guide` | Pointer shapes, the verdict rule, paging, and what to call after compaction. |

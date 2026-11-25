@@ -371,6 +371,74 @@ fn view_can_filter_states_and_drop_detail() {
 }
 
 #[test]
+fn guide_documents_probatio_survivors_with_an_example() {
+    let dir = project("guide-survivors");
+    let reply = talk(&dir, call("adsertio_guide", "{}", 1).as_bytes());
+    assert!(is_ok(&reply[0]), "{}", reply[0]);
+    assert!(
+        reply[0].contains("probatio:<out-dir>#survivors"),
+        "{}",
+        reply[0]
+    );
+    assert!(
+        reply[0].contains("probatio:out/run#survivors"),
+        "{}",
+        reply[0]
+    );
+    assert!(!dir.join(".adsertio").exists());
+}
+
+#[test]
+fn attach_returns_the_pointers_it_added_and_the_new_count() {
+    let dir = project("attach-added");
+    init(&dir);
+    let made = talk(
+        &dir,
+        call(
+            "adsertio_claim",
+            r#"{"summary":"Held","id":"held","evidence":["trammel:.trammel/store#plan-1"]}"#,
+            1,
+        )
+        .as_bytes(),
+    );
+    assert!(is_ok(&made[0]), "{}", made[0]);
+    let one = talk(
+        &dir,
+        call(
+            "adsertio_attach",
+            r#"{"id":"held","evidence":["probatio:out/run#survivors"]}"#,
+            1,
+        )
+        .as_bytes(),
+    );
+    assert!(is_ok(&one[0]), "{}", one[0]);
+    assert!(one[0].contains("probatio:out/run#survivors"), "{}", one[0]);
+    assert!(one[0].contains(r#"\"evidence\":2"#), "{}", one[0]);
+    let two = talk(
+        &dir,
+        call(
+            "adsertio_attach",
+            r#"{"id":"held","evidence":["chisel:.chisel/store#test:a","chisel:.chisel/store#test:b"]}"#,
+            1,
+        )
+        .as_bytes(),
+    );
+    assert!(is_ok(&two[0]), "{}", two[0]);
+    assert!(
+        two[0].contains("chisel:.chisel/store#test:a")
+            && two[0].contains("chisel:.chisel/store#test:b"),
+        "{}",
+        two[0]
+    );
+    assert!(two[0].contains(r#"\"evidence\":4"#), "{}", two[0]);
+    let text = std::fs::read_to_string(dir.join(".adsertio/claims/held.md")).unwrap();
+    assert!(
+        text.contains("#survivors") && text.contains("#test:b"),
+        "{text}"
+    );
+}
+
+#[test]
 fn the_two_binaries_do_not_share_main_rs() {
     let toml = include_str!("../Cargo.toml");
     assert_eq!(toml.matches("path = \"src/main.rs\"").count(), 1);

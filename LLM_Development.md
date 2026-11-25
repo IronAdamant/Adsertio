@@ -40,6 +40,8 @@ Probatio leave on disk. It does not call an LLM.
 **Date:** 2026-11-25
 
 - Attach takes an exclusive lock file so parallel updates are not dropped.
+- The guide lists Probatio `#survivors`. Attach returns the pointers it wrote
+  as well as the new evidence count.
 - Paging applies only when limit or offset is passed.
 - Pointers that cannot resolve are rejected at write. Duplicate ids use a
   relative path. Ids sort by number. A missing claims directory warns.

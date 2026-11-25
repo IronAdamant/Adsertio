@@ -8,6 +8,12 @@ fn guide_names_selectors_and_does_not_need_a_store() {
     let reply = talk(&dir, call("adsertio_guide", "{}", 1).as_bytes());
     assert!(is_ok(&reply[0]), "{}", reply[0]);
     assert!(reply[0].contains("plan-<id>/step-<id>"), "{}", reply[0]);
+    assert!(
+        reply[0].contains("probatio:<out-dir>#survivors")
+            && reply[0].contains("probatio:out/run#survivors"),
+        "{}",
+        reply[0]
+    );
     assert!(reply[0].contains("after_compaction"), "{}", reply[0]);
     assert!(reply[0].contains("adsertio_attach"), "{}", reply[0]);
     assert!(!dir.join(".adsertio").exists());
