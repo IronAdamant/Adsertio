@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.0
+
+Faster repeated evidence reads, and a smaller answer for an agent.
+
+- A `view` parses a shared Trammel snapshot, Chisel snapshot, or Probatio `results/` directory once and reuses it for every claim in that call. A regular Probatio result file is read in place. A symlink still has to stay inside the project. See `docs/perf/baseline-1.0.0.md` and `docs/perf/1.1.0.md`.
+- `adsertio_ls` and `adsertio_view` take `limit` (default 100, maximum 500) and `offset`. The page is `claims`. `truncated` and `next_offset` say whether another page exists. `count` and `counts` still cover every claim. Callers that listed a store of 100 claims or fewer see the same claims as 1.0.0, plus the two page fields.
+- `adsertio_guide` returns pointer shapes, the verdict rule, paging, and what to call after compaction. It does not read the store.
+- A missing claim id says to call `adsertio_ls` or `adsertio_claim`.
+
 ## 1.0.0
 
 The readers, freshness, attach, and list. Release binaries for Linux x64, macOS x64, macOS arm64, and Windows x64 are attached to the GitHub release. Not published to npm or crates.io.

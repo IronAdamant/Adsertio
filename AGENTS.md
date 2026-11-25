@@ -39,6 +39,7 @@ cargo build --release --locked
 - `src/json.rs` bounded JSON. `src/fsx.rs` atomic writes, path and slug guards.
 - `src/lock.rs` shared locks. `src/read.rs` snapshots, the journal, compact tables.
 - `src/trammel.rs`, `src/chisel.rs`, `src/probatio.rs` the adapters.
+- `src/cache.rs` reuses one parsed snapshot for every claim in a single view.
 - `src/fresh.rs` timestamp and commit checks. `src/verdict.rs` states and `combine`.
 - `src/tool.rs` tool table types and argument validation. `src/tools.rs` the tools.
 - `src/mcp.rs` the server. `src/groups.rs` the `agent-tools` block.

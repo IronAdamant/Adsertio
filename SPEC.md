@@ -161,11 +161,23 @@ file fails the whole view and the whole list. It is not left out.
   returns `{id, evidence}` (the new count). A bad pointer, an empty list, or a
   duplicate (in the request, or already on the claim) is an error and writes
   nothing. Only that claim file is replaced.
-- `adsertio_view` `{id?, verdict?}` returns `{claims, counts}`. Each claim has
-  `id`, `summary`, `verdict`, and `evidence` (`pointer`, `state`, `detail`).
-  `counts` covers every claim in the read, whatever `verdict` filters the list to.
-- `adsertio_ls` `{}` returns `{claims, count}`. Each claim has `id`, `summary`,
-  and `pointers`. It does not read evidence and does not include a verdict.
+- `adsertio_view` `{id?, verdict?, limit?, offset?}` returns
+  `{claims, counts, truncated, next_offset}`. Each claim has `id`, `summary`,
+  `verdict`, and `evidence` (`pointer`, `state`, `detail`). `counts` covers
+  every claim in the read, whatever `verdict` filters the list to.
+- `adsertio_ls` `{limit?, offset?}` returns `{claims, count, truncated, next_offset}`.
+  Each claim has `id`, `summary`, and `pointers`. It does not read evidence and
+  does not include a verdict. `count` is the whole store.
+- `adsertio_view` and `adsertio_ls` return one page. `limit` defaults to 100 and
+  is at most 500. `offset` skips that many matching claims. `truncated` is true
+  when another page exists, and `next_offset` is the offset to pass next (or
+  null). `counts` on a view still covers every claim, whatever `verdict` filters
+  the list to, and is not reduced by the page.
+- `adsertio_guide` `{}` returns pointer shapes, the verdict rule, paging, and
+  what to call after compaction. It does not read the store.
+
+One `view` call reads a given Trammel snapshot, Chisel snapshot, or Probatio
+`results/` directory once and reuses that parse for every claim in the call.
 
 Arguments are checked against the schema: unknown arguments, wrong types,
 missing required arguments, and values outside an `enum` are errors with
