@@ -31,7 +31,18 @@ Probatio leave on disk. It does not call an LLM.
   one parse of a shared snapshot per view, and a direct read of ordinary
   Probatio result files. Listing claim files did not get faster.
 - `adsertio_guide`, and `limit` / `offset` on `ls` and `view`. Counts still
-  cover the whole store. Default page is 100.
+  cover the whole store. Omit limit to return every claim.
+
+---
+
+## 1.1.0 review fixes
+
+**Date:** 2026-11-25
+
+- Attach takes an exclusive lock file so parallel updates are not dropped.
+- Paging applies only when limit or offset is passed.
+- Pointers that cannot resolve are rejected at write. Duplicate ids use a
+  relative path. Ids sort by number. A missing claims directory warns.
 
 ---
 

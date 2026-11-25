@@ -36,7 +36,7 @@ fn evidence_states_are_reported_per_pointer_and_never_count_as_proof_yet() {
     fs::write(outside.join("secret.json"), "{}").unwrap();
     let mut input = call(
         "adsertio_claim",
-        r#"{"summary":"Everything checks out","id":"all","evidence":["chisel:.chisel/store","trammel:.trammel/store","probatio:binary.dat","probatio:../nope.json","chisel:.chisel/store#tests"]}"#,
+        r#"{"summary":"Everything checks out","id":"all","evidence":["chisel:.chisel/store","trammel:.trammel/store","probatio:binary.dat","chisel:.chisel/store#tests"]}"#,
         1,
     );
     input += &call("adsertio_view", r#"{"id":"all"}"#, 2);
@@ -92,6 +92,8 @@ fn a_claim_is_never_overwritten() {
         is_ok(&r[0]) && is_error(&r[1]) && r[1].contains("already exists"),
         "{r:?}"
     );
+    assert!(r[1].contains(".adsertio/claims/pick.md"), "{r:?}");
+    assert!(!r[1].contains(&dir.display().to_string()), "{r:?}");
     assert!(fs::read_to_string(dir.join(".adsertio/claims/pick.md"))
         .unwrap()
         .contains("summary: first"));

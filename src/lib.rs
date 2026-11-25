@@ -25,7 +25,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub static SERVER: mcp::Server = mcp::Server {
     name: "adsertio",
     version: VERSION,
-    instructions: "Adsertio keeps claims and the evidence behind them. Record a claim with adsertio_claim and point at proof in Trammel, Chisel or Probatio (tool:path#selector). Add a pointer with adsertio_attach. List claims with adsertio_ls and read verdicts with adsertio_view. Both return one page: limit defaults to 100 and is at most 500, and next_offset is the next page. Call adsertio_guide for pointer shapes and what to do after the conversation is compacted. Nothing counts as verified without evidence that passes.",
+    instructions: "Adsertio keeps claims and the evidence behind them. Record a claim with adsertio_claim and point at proof in Trammel, Chisel or Probatio (tool:path#selector, a relative path with forward slashes inside the project). Add a pointer with adsertio_attach. List claims with adsertio_ls and read verdicts with adsertio_view. Omit limit to get every claim; pass limit (at most 500) and offset to page, and follow hint when the page is truncated. Call adsertio_guide for pointer shapes and what to do after the conversation is compacted. Nothing counts as verified without evidence that passes.",
     tools: tools::TOOLS,
     groups: tools::GROUPS,
     project: store::project_dir,

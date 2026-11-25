@@ -24,11 +24,14 @@ Standard library only, no Cargo crates. One binary: the `adsertio` CLI and the `
 
 ## Install
 
-A tag named `v*` (for example `v1.0.0`) builds the release binaries and attaches them to a GitHub release, with `SHA256SUMS`:
+A tag named `v*` (for example `v1.1.0`) builds the release binaries and attaches them to a GitHub release, with `SHA256SUMS`. The archive name is `adsertio-<version>-<target-triple>`:
 
-- Linux x64 (`adsertio-linux-x64.tar.gz`)
-- macOS x64 and arm64 (`adsertio-macos-x64.tar.gz`, `adsertio-macos-arm64.tar.gz`)
-- Windows x64 (`adsertio-windows-x64.zip`)
+- Linux x64 (`adsertio-<version>-x86_64-unknown-linux-gnu.tar.gz`)
+- macOS x64 (`adsertio-<version>-x86_64-apple-darwin.tar.gz`)
+- macOS arm64 (`adsertio-<version>-aarch64-apple-darwin.tar.gz`)
+- Windows x64 (`adsertio-<version>-x86_64-pc-windows-msvc.zip`, entries use forward slashes)
+
+The v1.0.0 release used shorter names: `adsertio-linux-x64.tar.gz`, `adsertio-macos-x64.tar.gz`, `adsertio-macos-arm64.tar.gz`, and `adsertio-windows-x64.zip`.
 
 Each archive contains `adsertio` and `adsertio-mcp` (the same program). Check the file against `SHA256SUMS` before you run it. Adsertio is not on crates.io, and there is no npm package.
 
@@ -69,7 +72,7 @@ evidence: [trammel:.trammel/store#plan-1/step-1]
 ---
 ```
 
-There is no `verdict` field. `adsertio view` computes it. `adsertio ls` lists id, summary, and pointer count, and does not read the evidence. Both return one page: `limit` defaults to 100 and is at most 500, `offset` skips that many, and `next_offset` is the next page when `truncated` is true. `count` and `counts` still cover the whole store. `adsertio guide` (MCP name `adsertio_guide`) is the short reminder of pointer shapes and what to call after a conversation is compacted.
+There is no `verdict` field. `adsertio view` computes it. `adsertio ls` lists id, summary, and pointer count, and does not read the evidence. With no `limit` or `offset`, both return every matching claim. Pass `limit` (1 to 500) and `offset` to page. When `truncated` is true, `hint` gives the next call and `next_offset` is the offset to pass. `count` and `counts` still cover the whole store. `adsertio view --states` keeps one or more of verified, refuted, and unverified. `--compact` drops evidence detail. `adsertio guide` (MCP name `adsertio_guide`) is the short reminder of pointer shapes and what to call after a conversation is compacted.
 
 Pointers are `tool:path[#selector]`. The tool is `trammel`, `chisel`, or `probatio`. The path is inside the project. Selectors are in [SPEC.md](SPEC.md). In short:
 

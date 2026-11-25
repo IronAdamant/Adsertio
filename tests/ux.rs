@@ -33,6 +33,11 @@ fn lists_are_paged_and_counts_stay_complete() {
     assert!(is_ok(&page[0]), "{}", page[0]);
     assert!(page[0].contains(r#"\"truncated\":true"#), "{}", page[0]);
     assert!(page[0].contains(r#"\"next_offset\":2"#), "{}", page[0]);
+    assert!(
+        page[0].contains(r#"next: adsertio_ls with {\\\"limit\\\":2,\\\"offset\\\":2}"#),
+        "{}",
+        page[0]
+    );
     assert!(page[0].contains(r#"\"count\":3"#), "{}", page[0]);
     assert!(
         page[0].contains("Alpha") && page[0].contains("Beta"),
@@ -49,9 +54,19 @@ fn lists_are_paged_and_counts_stay_complete() {
     assert!(rest[0].contains(r#"\"truncated\":false"#), "{}", rest[0]);
     assert!(rest[0].contains(r#"\"next_offset\":null"#), "{}", rest[0]);
 
+    let all = talk(&dir, call("adsertio_ls", "{}", 1).as_bytes());
+    assert!(is_ok(&all[0]), "{}", all[0]);
+    assert!(
+        all[0].contains("Gamma") && all[0].contains(r#"\"truncated\":false"#),
+        "{}",
+        all[0]
+    );
+    assert!(!all[0].contains("\"hint\""), "{}", all[0]);
+
     let viewed = talk(&dir, call("adsertio_view", r#"{"limit":1}"#, 1).as_bytes());
     assert!(viewed[0].contains(r#"\"unverified\":3"#), "{}", viewed[0]);
     assert!(viewed[0].contains(r#"\"truncated\":true"#), "{}", viewed[0]);
+    assert!(viewed[0].contains("next: adsertio_view"), "{}", viewed[0]);
 
     let bad = talk(&dir, call("adsertio_ls", r#"{"limit":0}"#, 1).as_bytes());
     assert!(

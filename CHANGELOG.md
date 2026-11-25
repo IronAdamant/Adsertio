@@ -5,9 +5,17 @@
 Faster repeated evidence reads, and a smaller answer for an agent.
 
 - A `view` parses a shared Trammel snapshot, Chisel snapshot, or Probatio `results/` directory once and reuses it for every claim in that call. A regular Probatio result file is read in place. A symlink still has to stay inside the project. See `docs/perf/baseline-1.0.0.md` and `docs/perf/1.1.0.md`.
-- `adsertio_ls` and `adsertio_view` take `limit` (default 100, maximum 500) and `offset`. The page is `claims`. `truncated` and `next_offset` say whether another page exists. `count` and `counts` still cover every claim. Callers that listed a store of 100 claims or fewer see the same claims as 1.0.0, plus the two page fields.
+- Omit `limit` and `offset` and `adsertio_ls` and `adsertio_view` return every matching claim, as 1.0.0 did. Pass `limit` (1 to 500) and `offset` to page. A truncated page includes `hint` with the next call. A list of more than 100 claims, with no limit, includes a hint that paging exists. `count` and `counts` still cover the whole read.
+- `adsertio_view` takes `states` (verified, refuted, unverified) and `compact` (pointer and state, no detail). `verdict` still selects one state. Passing both `verdict` and `states` is an error.
+- `adsertio_attach` holds an exclusive lock on that claim. Every successful attach is in the file. If another attach still holds the lock, the call fails and writes nothing. A lock older than 30 seconds is removed.
+- A pointer with a backslash, a drive letter, an absolute path, or `..` is rejected when it is written. The error says to use a relative path with forward slashes inside the project.
+- A duplicate claim id names `.adsertio/claims/<id>.md`.
+- `limit` has schema minimum 1.
+- `ADSERTIO_DIR` set to a folder with no `claims` directory prints `no claims store found at X; run init` and still exits 0. An initialised empty store stays quiet.
+- Claim ids that share a `created` time sort by number, so `c2` comes before `c100`.
 - `adsertio_guide` returns pointer shapes, the verdict rule, paging, and what to call after compaction. It does not read the store.
 - A missing claim id says to call `adsertio_ls` or `adsertio_claim`.
+- The next GitHub release names archives `adsertio-<version>-<target-triple>` (for example `adsertio-1.1.0-x86_64-unknown-linux-gnu.tar.gz`). Windows zip entries use forward slashes. The v1.0.0 assets keep the names already published.
 
 ## 1.0.0
 
