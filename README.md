@@ -134,6 +134,19 @@ adsertio: tools core
 ```
 ````
 
+## 1.2.0 on a large store
+
+Measured on Linux 6.12.113+ x86_64, Intel Xeon, MemTotal 16387328 kB, rustc 1.83.0. Release builds, one run each. RSS is `VmHWM`. The 100,000-step Trammel file was 14.9 MiB and the 200,000-result Chisel file was 11.5 MiB. Claim `i` pointed at one step and one test in those files. The full table is in [docs/perf/1.2.0.md](docs/perf/1.2.0.md).
+
+| Case | 1.1.1 | 1.2.0 | RSS 1.1.1 | RSS 1.2.0 |
+|---|---:|---:|---:|---:|
+| `view --limit 500`, 20,000 claims, 100,000 steps / 200,000 results | 249.086 s | 0.480 s | 238 MiB | 72 MiB |
+| `check`, 1,000 claims, same evidence | 199.101 s | 0.337 s | 153 MiB | 63 MiB |
+| `view`, 32 claims, one 63 MiB Trammel file | 0.353 s | 0.133 s | 191 MiB | 129 MiB |
+| `view` with no limit, 20,000 claims, 100,000 / 200,000 |  | 0.503 s |  | 72 MiB |
+
+The view drop is the per-snapshot index, and a page that judges only the claims it returns. 1.1.1 judged every claim on every page, and each selector scanned every row. The check drop is that same index, reused for the call, with no git. The 63 MiB file is still read whole. 1.2.0 does not keep the long `command` string, so RSS went from 191 MiB to 129 MiB. A full view of the 20,000-claim store took 0.503 s, next to the 0.480 s page, because both build the index once. `--limit 1` does not skip reading the snapshots.
+
 ## Built to fail loudly
 
 Covered by tests in `tests/`:
