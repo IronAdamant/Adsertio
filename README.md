@@ -253,16 +253,27 @@ adsertio: tools core
 ```
 ````
 
-## Upgrading from 1.2
+## Upgrading
 
-1.3.0 changes the tool surface; there were no users to keep compatible with, so the cleaner shape won.
+Claim files keep the same format from 1.2 on, so a store needs no migration.
+What changes for an agent or a script, newest first (all detail is in
+[CHANGELOG.md](CHANGELOG.md)):
 
-- `adsertio_claim` takes `claims` (a list) as well as the single-claim fields. Its schema no longer marks `summary` as required, because a batch call has no top-level summary. A call with neither is still an error, and says to pass `summary` or `claims`.
-- `adsertio_attach` takes `items` as well as `id` and `evidence`. Its schema no longer marks `id` and `evidence` as required, for the same reason.
-- A batch call replies `{ids, count}` (claim) or `{claims: [{id, evidence, added}]}` (attach). A single call replies as before.
-- A new tool, `adsertio_doctor`, is in the `core` group, so `tools/list` has seven tools.
-- The detail of a pass that is stale because its commit is not `HEAD` now ends with `; fix: rerun the tests at HEAD (...)`.
-- `adsertio_guide` has two new fields, `stale_after_commit` and `problems`, and its `after_compaction` and `writes` text changed.
+- **To 1.5:** `relatum:<store>#<note-id>` is a fourth evidence tool. `claim`
+  and `attach` now refuse a pointer whose shape can never be valid (no
+  selector, a malformed one, a Relatum path that names a note file), where
+  1.4 stored it and only showed it as `unreadable` at view. The error names
+  the expected shape and, where it can, the corrected pointer. Claims already
+  stored view exactly as before. `doctor` gains a `relatum` check.
+- **To 1.4:** attach locks are operating-system file locks. Stop every 1.3
+  writer before the first 1.4 write; `doctor --fix` and `check` remove the
+  lock files 1.3 left. A Chisel 0.25+ pass stays fresh after you commit
+  exactly the tested tree.
+- **To 1.3:** `adsertio_claim` and `adsertio_attach` take lists (`claims`,
+  `items`), so their schemas no longer mark `summary`, `id` or `evidence` as
+  required; a batch replies `{ids, count}` or `{claims: [...]}`.
+  `adsertio_doctor` arrived, and in 1.3.1 `adsertio_check` folded into it,
+  so `tools/list` has six tools.
 
 ## Built to fail loudly
 
