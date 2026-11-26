@@ -11,7 +11,7 @@ use crate::fsx;
 use crate::store::Store;
 use std::fs;
 
-pub const EVIDENCE_TOOLS: &[&str] = &["trammel", "chisel", "probatio"];
+pub const EVIDENCE_TOOLS: &[&str] = &["trammel", "chisel", "probatio", "relatum"];
 pub const MAX_SUMMARY: usize = 200;
 pub const MAX_POINTERS: usize = 50;
 pub const MAX_BODY_BYTES: usize = 20_000;
@@ -47,7 +47,7 @@ pub fn valid_pointer(p: &str) -> Result<(), String> {
             .any(|c| c.is_whitespace() || c.is_control() || matches!(c, ',' | '[' | ']'))
     {
         return Err(format!(
-            "evidence \"{}\" has an empty path, or a space, comma or bracket",
+            "evidence \"{}\" is longer than 300 characters, or has an empty path, or a space, comma or bracket",
             fsx::clip(p, 60)
         ));
     }

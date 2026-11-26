@@ -9,6 +9,7 @@ An agent says "the retry change passes" or "no test misses that branch". Usually
 - [Trammel](https://github.com/IronAdamant/Trammel) records plan steps and whether each one was verified.
 - [Chisel](https://github.com/IronAdamant/Chisel) records test results and which tests touch which files.
 - [Probatio](https://github.com/IronAdamant/Probatio) records mutation runs: small deliberate bugs, and whether a test caught each one.
+- [Relatum](https://github.com/IronAdamant/Relatum) keeps notes in `.swarmnotes/`, including the project's rules (constraints, conventions, decisions), and marks a rule superseded when a newer one replaces it.
 
 Adsertio ties a one-line claim to that proof. Each time you look at the claim, it reads those files again and gives one of three answers:
 
@@ -20,7 +21,7 @@ The answer is worked out fresh on every view and is never stored. A file Adserti
 
 What it deliberately does not do:
 
-- run Trammel, Chisel, or Probatio, or write into their folders
+- run Trammel, Chisel, Probatio, or Relatum, or write into their folders
 - copy their data (a claim holds pointers, not copies)
 - call a model
 - plan work, run tests, or change code
@@ -133,8 +134,11 @@ A pointer is `tool:path#selector`. The full rules are in [SPEC.md](SPEC.md). In 
 | `probatio:<out>` or `probatio:<out>#survivors` | the run finished, at least one mutant was caught, and none got through |
 | `probatio:<out>#mutant:<id>` | that one mutant was caught (`killed`) |
 | `probatio:<out>#ledger` | never: an unchecked ledger is not proof |
+| `relatum:.swarmnotes#<note-id>` | the Relatum note exists, its frontmatter is sound, and it is active (a superseded note fails, a draft is `inconclusive`) |
 
 For Probatio, "finished" means no result is `flaky`, `error`, or `no coverage`, and every mutant in the mutant lists the run's `run.json` names has a result. If Adsertio cannot find or read those lists (no `run.json`, a list outside the project, a deleted patches folder), the run is `inconclusive`, not a pass.
+
+A Relatum note id is its path under the store without `.md`, such as `net/retry-decision`. When a rule is superseded, a claim that points at it is refuted, and the detail names the note that replaced it: point the claim at that note instead. Adsertio does not follow the supersede chain, so a pointer always judges the note it names. A note Relatum could not read (no frontmatter, no `kind` or `summary`, an unknown `status`, or `superseded` with no `superseded_by`) is `unreadable`.
 
 A `probatio mutate diff` run is always `inconclusive`. Probatio does not write down the full list of mutants a diff plans, so a call capped by `--max-mutants` looks the same on disk as a whole one. Point at one mutant (`#mutant:<id>`), or score with `probatio mutate generate` and `probatio mutate run` to get a whole run Adsertio can check.
 
@@ -143,6 +147,8 @@ A `probatio mutate diff` run is always `inconclusive`. Probatio does not write d
 A pass recorded **before** the claim was written does not verify it, and neither does a pass recorded against a commit that is not the current `HEAD`. Either one shows as `stale`, and the claim stays unverified. A failure always refutes, however old it is. So the normal order is: write the claim, produce the evidence, then view.
 
 One exception: Probatio records no time or commit, so a Probatio pass is never stale. An old run can still verify a new claim, and the detail says `no timestamp`.
+
+A Relatum rule is never stale either. Like a Trammel `constraint-<id>`, a rule is a state, not an event: it is normal for the rule to be written before the claim, and what matters is whether it is still active when you look.
 
 Testing uncommitted work and then committing it is the usual order, and it moves `HEAD`. Chisel 0.25.0 and later also record `tree`, the git tree of the working tree the tests ran against (uncommitted and untracked files included). A Chisel pass whose commit is not `HEAD` still counts when that tree is `HEAD`'s tree, or differs from it only under `.adsertio`, `.chisel`, `.trammel` or `.probatio` (claims and evidence, not code): the code that was tested is exactly the committed code, and the detail says so. Any other change committed after the run makes it `stale`. An older Chisel records no tree, and Trammel records none, so for those the commit must be `HEAD`.
 
@@ -158,7 +164,7 @@ When a Chisel or Trammel pass is stale because its commit is not `HEAD`, the det
 | `fail` | The evidence says it does not. |
 | `missing` | The file or record is not there yet, or a step has not been verified. |
 | `stale` | It passed, but before the claim, or on a different commit (and, for Chisel, on code that is not the committed code). |
-| `inconclusive` | Read fine, but neither a pass nor a fail (for example, a mutation run with no catch and no survivor). |
+| `inconclusive` | Read fine, but neither a pass nor a fail (for example, a mutation run with no catch and no survivor, or a Relatum draft). |
 | `unreadable` | Adsertio could not safely read or understand it. |
 | `no_adapter` | Recognised, but deliberately not read (Chisel worktree overlays, and a pointer at one Chisel shard). |
 
@@ -231,6 +237,7 @@ so the agent sees the claims that are not verified and reads them again instead 
 - whether the store is on a network file system, where file locks may not hold between machines (a warning; the check still passes)
 - `git` on `PATH`, and what `git rev-parse HEAD` says
 - `.trammel/store`, `.chisel/store` and `.probatio`: there or not, size against the read limits, and whether Adsertio can read them
+- `.swarmnotes`: there or not, and whether Adsertio can read every note in it (with a count of active, draft and superseded notes)
 - that `adsertio-mcp` sits next to `adsertio`
 - on Windows, how close the store path is to the 260-character limit
 
@@ -260,11 +267,11 @@ adsertio: tools core
 When something is wrong, Adsertio says so instead of guessing. Each of these is covered by tests in `tests/`:
 
 - **Damaged claims.** A damaged claim stops the whole view and list with an error naming the file. It is never skipped, and the store is never reset.
-- **Files it cannot trust are not proof.** A path that leaves the project, a Trammel or Chisel store over 1 GiB (Chisel's own limit), any other evidence file over 64 MiB, a file that is not UTF-8, a damaged Trammel or Chisel store, or a broken Probatio result is `unreadable`, never an empty pass. An old SQLite store gets a hint to run `trammel migrate` or `chisel migrate`.
+- **Files it cannot trust are not proof.** A path that leaves the project, a Trammel or Chisel store over 1 GiB (Chisel's own limit), any other evidence file over 64 MiB, a file that is not UTF-8, a damaged Trammel or Chisel store, a broken Probatio result, or a Relatum note with damaged frontmatter is `unreadable`, never an empty pass. An old SQLite store gets a hint to run `trammel migrate` or `chisel migrate`.
 - **Probatio runs must be finished.** An outcome Probatio does not write is `unreadable`. A `flaky`, `error` or `no coverage` result, a run with results missing, or a run whose mutant list cannot be checked, is `inconclusive`.
 - **Chisel results come from the main store.** Chisel records test results only in `.chisel/store`. A pointer at it also reads the test edges in every shard, however the path is written (`./`, `//`, or through a symlink), but a shard's own result rows are never used. A pointer into `.chisel/overlays/` is not read, whatever its letter case or however a symlink reaches it.
 - **Safe writes.** Writes land whole through a temp file. A new claim never overwrites another, and attach replaces only its own claim, under an operating-system lock on `.adsertio/locks/<id>.lock` (`flock` on Unix, `LockFileEx` on Windows). Attaches to one claim take turns, so none loses a pointer; attaches to different claims run side by side. If an attach is killed, the kernel releases its lock at once: there is no stale lock to wait out or clear.
-- **Hands off other tools' files.** Adsertio takes a shared lock when Trammel or Chisel has a lock file, and never creates their locks or deletes their temp files or journals.
+- **Hands off other tools' files.** Adsertio takes a shared lock when Trammel or Chisel has a lock file, and never creates their locks or deletes their temp files or journals. Relatum has no lock file (it publishes each note whole), so a note is read plainly, and nothing is ever written into `.swarmnotes`.
 - **A strict server.** Bad JSON, oversized messages and batches get a JSON-RPC error and the server keeps running. Unknown methods and misspelt arguments are errors. A tool that panics is contained.
 
 ## Performance

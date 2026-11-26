@@ -117,6 +117,9 @@ pub fn read_evidence(project: &Path, pointer: &str) -> Evidence {
     if tool == "probatio" {
         return crate::probatio::evaluate(project, pointer);
     }
+    if tool == "relatum" {
+        return crate::relatum::evaluate(project, pointer);
+    }
     let path = rest.split('#').next().unwrap_or("");
     let file = match fsx::project_file(project, path) {
         Ok(f) => f,

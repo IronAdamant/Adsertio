@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.5.0
+
+Same claim format as 1.4.0, with a fourth evidence tool. A project rule kept
+as a Relatum note (a constraint, convention or decision in `.swarmnotes/`)
+can now back a claim, and the verdict is worked out in Adsertio, so the CLI,
+the MCP server and the session hook agree on it.
+
+- `relatum:<store>#<note-id>`, the store relative to the project (normally
+  `.swarmnotes`) and the note id its path under the store without `.md`. It
+  passes when the note exists, its frontmatter is sound, and its `status` is
+  `active` (or absent). A `superseded` note fails, and the detail names its
+  `superseded_by` and says to point the claim there. A `draft` is
+  `inconclusive`. A missing store or note is `missing`. No note id, a bad id,
+  damaged frontmatter (missing or unclosed, a line that is not `key: value`,
+  no `kind` or `summary`, an unknown `status`, `superseded` with no valid
+  `superseded_by`, or an `active` or `draft` note that has a `superseded_by`,
+  which Relatum's own `get` refuses), a note that is not UTF-8 or over 64 MiB, or a path or
+  symlink leaving the project or the store is `unreadable`.
+- The note is read the way Relatum reads it: a byte order mark is dropped and
+  CRLF becomes LF, so a note Relatum wrote on Windows reads the same.
+- A Relatum pass is never `stale`. A rule is a state, not an event, like a
+  Trammel `constraint-<id>`: it is normal for it to predate the claim.
+- The supersede chain is not followed: a pointer judges the note it names.
+  Adsertio never writes into `.swarmnotes` and takes no lock there (Relatum
+  publishes each note whole and has no lock file).
+- `adsertio doctor` has a `relatum` check: `.swarmnotes` absent, present, and
+  whether every note in it can be read, with a count of active, draft and
+  superseded notes.
+- `adsertio_guide` lists `relatum:.swarmnotes#<note-id>` and has a `relatum`
+  field. The `adsertio_claim` and `adsertio_doctor` descriptions, the server
+  instructions and `adsertio --help` name Relatum.
+- The error for a pointer over 300 characters now says so.
+- `tests/relatum.rs`: every state, the CLI and MCP end to end, mixed claims,
+  hostile paths, bytes that are not a note, freshness, and doctor.
+
 ## 1.4.0
 
 Same claim format as 1.3.1. This release cuts the rerun an agent made after

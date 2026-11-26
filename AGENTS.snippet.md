@@ -1,7 +1,8 @@
 ## Adsertio: claims and the evidence behind them
 
 This project uses Adsertio (`.adsertio/`). A claim is one line saying something
-is true, with pointers to proof that Trammel, Chisel or Probatio left on disk.
+is true, with pointers to proof that Trammel, Chisel or Probatio left on disk,
+or to a project rule Relatum keeps (`relatum:.swarmnotes#<note-id>`).
 
 - Record a claim with `adsertio_claim`. Point at evidence as `tool:path#selector`,
   for example `trammel:.trammel/store#plan-1/step-1`. Do not paste results in.

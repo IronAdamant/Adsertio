@@ -106,6 +106,7 @@ pub fn run(fix: bool) -> Value {
         checks.push(store_file_check(&project, "chisel", ".chisel/store"));
     });
     checks.push(probatio_check(&project));
+    checks.push(relatum_check(&project));
     checks.push(binaries_check());
     let ok = checks.iter().all(|c| c.ok);
     let mut out = vec![
@@ -514,6 +515,109 @@ fn find_runs(dir: &Path, rel: &str, depth: usize, out: &mut Vec<String>) {
     subdirs.sort();
     for name in subdirs {
         find_runs(&dir.join(&name), &format!("{rel}/{name}"), depth + 1, out);
+    }
+}
+
+const MAX_NOTES: usize = 2_000;
+
+/// `.swarmnotes`, the Relatum store a `relatum:` pointer normally names, and
+/// every note in it (up to [`MAX_NOTES`]), each read the way a pointer reads it.
+fn relatum_check(project: &Path) -> Check {
+    let root = project.join(".swarmnotes");
+    if std::fs::symlink_metadata(&root).is_err() {
+        return Check::pass("relatum", ".swarmnotes is not present");
+    }
+    let resolved = match fsx::project_file(project, ".swarmnotes") {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            return Check::fail(
+                "relatum",
+                format!(".swarmnotes cannot be read: {e}"),
+                "Keep the Relatum store as a real folder inside the project; a symlink out of the project is refused.",
+            )
+        }
+    };
+    if !resolved.is_dir() {
+        return Check::fail(
+            "relatum",
+            ".swarmnotes is not a folder",
+            "Run relatum init in the project folder so .swarmnotes is the Relatum store.",
+        );
+    }
+    let mut ids = Vec::new();
+    find_notes(&resolved, "", &mut ids);
+    let capped = if ids.len() >= MAX_NOTES {
+        format!(" (the first {MAX_NOTES} checked)")
+    } else {
+        String::new()
+    };
+    let mut bad = Vec::new();
+    let (mut active, mut draft, mut superseded) = (0, 0, 0);
+    for id in &ids {
+        let evidence = verdict::read_evidence(project, &format!("relatum:.swarmnotes#{id}"));
+        match evidence.state {
+            State::Pass => active += 1,
+            State::Inconclusive => draft += 1,
+            State::Fail => superseded += 1,
+            _ => bad.push(format!("{id}: {}", evidence.detail)),
+        }
+    }
+    if bad.is_empty() {
+        return Check::pass(
+            "relatum",
+            format!(
+                ".swarmnotes is present and Adsertio can read its {} note(s){capped}: {active} active, {draft} draft, {superseded} superseded",
+                ids.len()
+            ),
+        );
+    }
+    let shown: Vec<&str> = bad.iter().take(5).map(String::as_str).collect();
+    let more = bad.len() - shown.len();
+    let tail = if more > 0 {
+        format!(" (and {more} more)")
+    } else {
+        String::new()
+    };
+    Check::fail(
+        "relatum",
+        format!(
+            "{} of {} note(s) under .swarmnotes cannot be read{capped}: {}{tail}",
+            bad.len(),
+            ids.len(),
+            shown.join("; ")
+        ),
+        "Repair the frontmatter of each note named (relatum check lists the problems), or move it out of .swarmnotes. Adsertio never edits a Relatum note.",
+    )
+}
+
+/// Note ids under the store, sorted: `*.md` files whose name makes a valid
+/// id. Dot-names are skipped (Relatum's temp files), and a symlinked folder
+/// is not followed.
+fn find_notes(dir: &Path, prefix: &str, out: &mut Vec<String>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<(String, bool)> = rd
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_str()?.to_string();
+            let is_dir = e.file_type().ok()?.is_dir();
+            (!name.starts_with('.')).then_some((name, is_dir))
+        })
+        .collect();
+    entries.sort();
+    for (name, is_dir) in entries {
+        if out.len() >= MAX_NOTES {
+            return;
+        }
+        if is_dir {
+            find_notes(&dir.join(&name), &format!("{prefix}{name}/"), out);
+        } else if let Some(stem) = name.strip_suffix(".md") {
+            let id = format!("{prefix}{stem}");
+            if crate::relatum::valid_id(&id) {
+                out.push(id);
+            }
+        }
     }
 }
 

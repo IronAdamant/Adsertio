@@ -1,7 +1,7 @@
 # Adsertio
 
 One verified-or-unverified view per claim, read from the evidence Trammel, Chisel
-and Probatio leave on disk. One std-only Rust crate: the `adsertio` CLI and the
+and Probatio leave on disk and the rules Relatum keeps. One std-only Rust crate: the `adsertio` CLI and the
 `adsertio-mcp` stdio server (`adsertio mcp` is the same program). Read `SPEC.md`
 for the format and `README.md` for what is built.
 
@@ -10,7 +10,8 @@ for the format and `README.md` for what is built.
 - `[dependencies]`, `[dev-dependencies]`, and `[build-dependencies]` stay empty;
   `tests/zero_deps.rs` checks it, and `Cargo.lock` holds one package. Do not add
   a crate.
-- Never call a model, and never run Trammel, Chisel or Probatio. Read their files.
+- Never call a model, and never run Trammel, Chisel, Probatio or Relatum. Read
+  their files.
 - Read the other tools' files read-only. Never write into their stores. Do not
   create their lock files, and do not delete `store.tmp` or a journal.
 - Do not duplicate what they hold. A claim carries pointers, not copies.
@@ -47,7 +48,8 @@ cargo build --release --locked
   and the network file system probe, std only, shared with Libellus.
 - `src/lock.rs` shared locks on Trammel's and Chisel's lock files.
   `src/read.rs` snapshots, the journal, compact tables.
-- `src/trammel.rs`, `src/chisel.rs`, `src/probatio.rs` the adapters.
+- `src/trammel.rs`, `src/chisel.rs`, `src/probatio.rs`, `src/relatum.rs` the
+  adapters.
 - `src/trammel_idx.rs`, `src/chisel_idx.rs` one index per snapshot per call.
 - `src/paging.rs` view pages and the `after` cursor.
 - `src/cache.rs` reuses one indexed snapshot, one `git rev-parse HEAD HEAD^{tree}`, and one `git diff-tree` per recorded tree, for every claim in a single view or check.
@@ -61,7 +63,7 @@ cargo build --release --locked
 - `.github/workflows/release.yml` builds the GitHub release when a `v*` tag is pushed. No npm, no crates.io.
 - `tests/hostile_input.rs`, `tests/claims_and_evidence.rs`,
   `tests/cli_and_groups.rs`, `tests/reader.rs`, `tests/trammel.rs`,
-  `tests/chisel.rs`, `tests/probatio.rs`, `tests/fresh.rs`, `tests/attach_ls.rs`,
+  `tests/chisel.rs`, `tests/probatio.rs`, `tests/relatum.rs`, `tests/fresh.rs`, `tests/attach_ls.rs`,
   `tests/load.rs`, `tests/fixes.rs`, `tests/perf.rs`, `tests/ux.rs`,
   `tests/review3.rs`, `tests/review4.rs`, `tests/review5.rs`,
   `tests/v130.rs`, `tests/v140.rs`, `tests/oslock.rs`, `tests/tool_budget.rs`,

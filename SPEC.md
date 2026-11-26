@@ -2,7 +2,8 @@
 
 Adsertio keeps claims and works out, on demand, whether the evidence behind
 each one supports it. The claim files are the product. The CLI and MCP server
-are conveniences over them. The evidence stays in the other tools' own files.
+are conveniences over them. The evidence stays in the other tools' own files:
+Trammel's, Chisel's and Probatio's records, and the rules Relatum keeps.
 
 No claim is verified without a passing adapter result. A file the adapter
 does not understand is `unreadable` or `no_adapter`, never `pass`.
@@ -57,14 +58,15 @@ missing field, or an unclosed frontmatter are errors naming the file.
 
 **Evidence pointer:** `<tool>:<path>[#selector]`.
 
-- `tool` is `trammel`, `chisel`, or `probatio`.
+- `tool` is `trammel`, `chisel`, `probatio`, or `relatum`.
 - `path` is relative to the project, up to 300 characters in all, with no
   whitespace, commas, or brackets.
 - `selector` chooses a row inside that file. The grammar is below.
 
 Trammel and Chisel pointers with no selector are `unreadable` (a selector is
 required) once the file itself can be read. A missing file is `missing`. A
-Probatio pointer with no selector means the whole run.
+Probatio pointer with no selector means the whole run. A Relatum pointer with
+no note id, or a bad one, is `unreadable` whether or not the store is there.
 
 ## 3. Selectors
 
@@ -81,6 +83,7 @@ Ids in Trammel selectors are the row `id`, not `step_index`.
 | `probatio:<out-dir>` | none, or `survivors` | at least one `killed`, zero `survived`, no `flaky`, `error`, or `no coverage`, and a result for every mutant in the run's lists | any result is `survived` | only `timeout` or `unviable`; any `flaky`, `error`, or `no coverage`; fewer results than the run's lists; a run whose lists cannot be found or read; a `mutate diff` run; or no results file and only a tally: `inconclusive`. An outcome Probatio does not write: `unreadable` |
 | same | `mutant:<id>` | `results/<id>.json` has outcome `killed` | outcome `survived` | another Probatio outcome: `inconclusive`. An outcome Probatio does not write: `unreadable` |
 | same | `ledger` | never | never | `inconclusive`, with the entry count |
+| `relatum:<store>` (normally `.swarmnotes`) | `<note-id>` | the note exists, its frontmatter is sound, and `status` is `active` or absent | `status` is `superseded`; the detail names `superseded_by` and says to point the claim at it | `status` is `draft`: `inconclusive`. The store or the note file is not there: `missing`. No note id, a bad note id, damaged frontmatter (including a note that is not `superseded` but has a `superseded_by`, which `relatum get` also refuses), not UTF-8, over the size limit, or a path leaving the project: `unreadable` |
 
 `killed` with `cause` `build` is `unviable`. It is not a kill and not a survivor.
 The outcomes Probatio writes are `killed`, `survived`, `timeout`,
@@ -126,6 +129,13 @@ not read. The parts are compared without regard to letter case, and the
 path is also resolved, so `.CHISEL/OVERLAYS/...` or a symlink into the
 overlays folder is caught.
 
+A Relatum note id is the note's path under the store without `.md`: segments
+matching `_?[a-z0-9][a-z0-9-]*`, joined by `/` (Relatum SPEC section 2). The
+pointer reads `<store>/<note-id>.md`, nothing else. The supersede chain is not
+followed: a pointer judges the note it names, so a superseded note fails even
+when its replacement is active, and the claim should be pointed at the
+replacement.
+
 ## 4. How the other files are read
 
 Adapters only read. They do not run the other tools, and they do not create
@@ -154,12 +164,33 @@ the results stand and the detail says so. If only `tally.json` exists, the
 pointer is `inconclusive` and says that results were missing. `#ledger` reads
 `ledger.json`, counts `entries`, and is not proof.
 
+**Relatum.** The store is a folder; a file is `unreadable`. The note must
+resolve inside the project and inside the store, so a symlink out of either
+is `unreadable`, and a folder named like a note (`<id>.md/`) is `unreadable`.
+A scope folder with no `<id>.md` is `missing`. The note is read the way
+Relatum reads it: a leading byte order mark is dropped, and CRLF and CR
+become LF (Relatum writes CRLF on Windows). The frontmatter opens with `---`
+on the first line and closes at the first `\n---\n`. Blank lines and lines
+starting with `#` are skipped. Every other line must be `key: value`; a
+repeated key keeps its last value, as Relatum's reader does. The note is
+damaged, and the pointer `unreadable`, when the frontmatter is missing or
+never closed, a line is not `key: value`, `kind` or `summary` is missing or
+empty, `status` is not `active`, `draft` or `superseded`, or `status` is
+`superseded` and `superseded_by` is missing or not a note id, or `status` is
+not `superseded` but `superseded_by` is set (not blank and not `[]`), which
+Relatum's own `resolve` refuses. A value
+written as an inline list (`[a, b]`) is not a kind, summary or status.
+Other keys, including unknown ones, are not judged; that is `relatum
+check`'s job. Relatum publishes each note whole (a hard link for a new note,
+a rename for a supersede) and has no lock file, so Adsertio takes no lock
+and never writes into the store.
+
 **Size.** A Trammel or Chisel store, and the Trammel journal, may be up to
 1 GiB, which is Chisel's own limit (`MAX_INPUT`), so any store Chisel writes
-can be read. Any other evidence file, Probatio's included, may be up to
-64 MiB. A larger file is `unreadable`, and the detail gives its size, the
-limit, and why: the file is read whole into memory and then indexed, so a
-read holds about the file's size plus that index.
+can be read. Any other evidence file, Probatio's and a Relatum note
+included, may be up to 64 MiB. A larger file is `unreadable`, and the detail
+gives its size, the limit, and why: the file is read whole into memory and
+then indexed, so a read holds about the file's size plus that index.
 
 **SQLite.** A file that starts with `SQLite format 3` is `unreadable`. For
 Trammel and Chisel the detail says to run that tool's `migrate`. There is no
@@ -198,6 +229,12 @@ SQLite reader. The live stores are JSON.
   view, and only when that tree is not HEAD's. Trammel records no tree, so
   a Trammel pass keeps the commit rule.
 - No timestamp and no commit can still pass. The detail says `no timestamp`.
+  Probatio records no time or commit, so a Probatio pass is never stale.
+- A Relatum note is a rule: a state, not an event, like a Trammel
+  `constraint-<id>`. A rule written before the claim is normal, so a Relatum
+  pass carries no time and no commit and is never `stale`, whatever HEAD is
+  and however old the note. The note's `updated` date is not read for
+  freshness, and git is not run for it.
 - A `fail` stays a `fail`.
 
 ## 5. Verdict
@@ -208,10 +245,10 @@ Per pointer, `read_evidence` returns a state:
 |---|---|
 | `pass` | The evidence says the claim holds. |
 | `fail` | The evidence says it does not. |
-| `missing` | The file or the row is not there, or a step has not been verified yet. |
-| `unreadable` | Outside the project, the wrong kind of file, over the size limit (below), not UTF-8, a symlink route out, SQLite, bad JSON, bad magic, or a selector the adapter rejects. |
+| `missing` | The file, the row, or the Relatum note is not there, or a step has not been verified yet. |
+| `unreadable` | Outside the project, the wrong kind of file, over the size limit (below), not UTF-8, a symlink route out, SQLite, bad JSON, bad magic, damaged note frontmatter, or a selector the adapter rejects. |
 | `no_adapter` | Recognised, and not interpreted. Worktree overlays. Not proof. |
-| `inconclusive` | Read, and neither a pass nor a fail. A mutation timeout, a run with no kill and no survivor, an unchecked ledger. |
+| `inconclusive` | Read, and neither a pass nor a fail. A mutation timeout, a run with no kill and no survivor, an unchecked ledger, a Relatum draft. |
 | `stale` | Was a pass, and is older than the claim or tied to a commit that is not HEAD (unless Chisel's recorded tree shows it tested the committed code). |
 
 Per claim, `combine`:
@@ -406,6 +443,7 @@ when every check passes. The CLI prints the JSON either way and exits 0 when
 | `git` | `git` is not on `PATH`, or `git rev-parse HEAD` fails in the project |
 | `trammel_store`, `chisel_store` | the file is over the 1 GiB limit, or present and not readable by Adsertio (read the way a pointer reads it, shared lock included) |
 | `probatio` | `.probatio` is not a folder, or a run folder in it (one holding `results/`, `run.json`, `tally.json` or `ledger.json`, up to two levels down, at most 50) is `unreadable` |
+| `relatum` | `.swarmnotes` is present and is not a folder inside the project, or a note in it (a `*.md` file whose path makes a note id, dot-names skipped, symlinked folders not followed, at most 2000) is `unreadable` read the way a pointer reads it. The detail counts the active, draft and superseded notes. Absent passes |
 | `binaries` | `adsertio` and `adsertio-mcp` are not both in the folder of the running program |
 
 Without a store, the store checks are left out and the rest run in the
@@ -436,5 +474,6 @@ Newline-delimited JSON-RPC 2.0 on stdio.
 - A verdict that ledger bugs were re-caught. `#ledger` only counts entries.
 - Resolving `adsertio:<id>` from a Libellus note. Libellus already stores the
   pointer as text.
-- Running Trammel, Chisel, or Probatio.
+- Running Trammel, Chisel, Probatio, or Relatum, or writing a Relatum note.
+- Following a Relatum supersede chain, or judging a note's `updated` date.
 - An npm package or a crates.io publish. A tag named `v*` builds release binaries and attaches them to the GitHub release.

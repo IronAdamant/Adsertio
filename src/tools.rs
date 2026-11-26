@@ -13,7 +13,7 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         name: "adsertio_claim",
         group: "core",
-        description: "Record claims (one line each: something is true) with evidence pointers tool:path[#selector] (tool trammel, chisel or probatio; path inside the project). Record all claims in one call with claims; a bad item writes nothing. Never overwrites.",
+        description: "Record claims (one line each: something is true) with evidence pointers tool:path[#selector] (tool trammel, chisel, probatio or relatum; path inside the project). Record all claims in one call with claims; a bad item writes nothing. Never overwrites.",
         params: &[
             Param { name: "claims", kind: Kind::ObjList, required: false, doc: "Several claims, each with the fields below. Not with the single-claim fields.", choices: &[], fields: CLAIM_FIELDS },
             Param { name: "summary", kind: Kind::Str, required: false, doc: "One claim: one line, at most 200 characters.", choices: &[], fields: &[] },
@@ -64,7 +64,7 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         name: "adsertio_doctor",
         group: "core",
-        description: "Find what is wrong: the store, damaged claims, malformed evidence times, git, and the Trammel, Chisel and Probatio files. Returns {ok, checks}; each failing check has a fix.",
+        description: "Find what is wrong: the store, damaged claims, malformed evidence times, git, and the Trammel, Chisel, Probatio and Relatum files. Returns {ok, checks}; each failing check has a fix.",
         params: &[
             Param { name: "fix", kind: Kind::Bool, required: false, doc: "First remove temp and lock files left by a dead writer.", choices: &[], fields: &[] },
         ],
@@ -899,6 +899,12 @@ fn guide(_a: &Args) -> Result<Value, String> {
             ),
         ),
         (
+            "relatum",
+            Value::str(
+                "relatum:.swarmnotes#<note-id> judges that one Relatum note: active passes, superseded fails (point the claim at its superseded_by), draft is inconclusive. A rule is a state, not an event, so a Relatum pass is never stale.",
+            ),
+        ),
+        (
             "problems",
             Value::str(
                 "adsertio_doctor reports what is wrong with the store, damaged claims, git, or the evidence files, each with a fix. fix: true first removes temp and lock files whose writer is gone. adsertio check (CLI) fails on any damaged claim, for scripts and CI.",
@@ -918,6 +924,7 @@ fn guide(_a: &Args) -> Result<Value, String> {
                 Value::str("probatio:out/run#survivors"),
                 Value::str("probatio:<out-dir>#mutant:<id>"),
                 Value::str("probatio:<out-dir>#ledger"),
+                Value::str("relatum:.swarmnotes#<note-id>"),
             ]),
         ),
         (

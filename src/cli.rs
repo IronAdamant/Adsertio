@@ -37,7 +37,7 @@ claim: [{"summary":"...","evidence":["chisel:.chisel/store#test:t1"]}].
 quoting JSON differs between cmd, PowerShell and Git Bash, write the array to
 a file and pass --claims-file or --items-file.
 
-Evidence tools: trammel, chisel, probatio. Output is JSON; the exit code is 1 on
+Evidence tools: trammel, chisel, probatio, relatum. Output is JSON; the exit code is 1 on
 any error, 2 on a usage error (an unknown command or flag, a repeated flag, a
 missing or bad value). doctor exits 1 when a check fails."#;
 

@@ -1,5 +1,5 @@
 //! Adsertio: one verified-or-unverified view per claim, read from the evidence
-//! that Trammel, Chisel and Probatio left on disk.
+//! that Trammel, Chisel and Probatio left on disk, and the rules Relatum keeps.
 //! Standard library only. See basis.md for the design and SPEC.md for the format.
 
 pub mod cache;
@@ -19,6 +19,7 @@ pub mod oslock;
 pub mod paging;
 pub mod probatio;
 pub mod read;
+pub mod relatum;
 pub mod store;
 pub mod tool;
 pub mod tools;
@@ -31,7 +32,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub static SERVER: mcp::Server = mcp::Server {
     name: "adsertio",
     version: VERSION,
-    instructions: "Adsertio keeps claims and pointers to their evidence. Nothing counts as verified without evidence that passes. Record all claims in one adsertio_claim call (claims: [{summary, evidence}]); a pointer is tool:path#selector into Trammel, Chisel or Probatio files (relative path, forward slashes). Add pointers with adsertio_attach (items: [{id, evidence}]). Read verdicts with adsertio_view. adsertio_guide has pointer shapes and what to do after compaction; adsertio_doctor finds problems.",
+    instructions: "Adsertio keeps claims and pointers to their evidence. Nothing counts as verified without evidence that passes. Record all claims in one adsertio_claim call (claims: [{summary, evidence}]); a pointer is tool:path#selector into Trammel, Chisel, Probatio or Relatum files (relative path, forward slashes). Add pointers with adsertio_attach (items: [{id, evidence}]). Read verdicts with adsertio_view. adsertio_guide has pointer shapes and what to do after compaction; adsertio_doctor finds problems.",
     tools: tools::TOOLS,
     groups: tools::GROUPS,
     project: store::project_dir,

@@ -212,7 +212,9 @@ pub fn read_chisel(project: &Path, rel: &str) -> Result<Snapshot, ReadError> {
     })
 }
 
-fn open_contained(project: &Path, rel: &str) -> Result<PathBuf, ReadError> {
+/// A path inside the project, resolved. Not there is [`ReadError::Missing`];
+/// any route out of the project is [`ReadError::Unreadable`].
+pub(crate) fn open_contained(project: &Path, rel: &str) -> Result<PathBuf, ReadError> {
     match fsx::project_file(project, rel) {
         Ok(path) => Ok(path),
         Err(text) if text.ends_with("does not exist") => Err(ReadError::Missing(text)),
@@ -265,7 +267,8 @@ fn contained(project: &Path, path: &Path) -> Result<PathBuf, ReadError> {
     }
 }
 
-fn read_bytes(path: &Path, label: &str, limit: u64) -> Result<Vec<u8>, ReadError> {
+/// A regular file's bytes, refused past `limit` before and after the read.
+pub(crate) fn read_bytes(path: &Path, label: &str, limit: u64) -> Result<Vec<u8>, ReadError> {
     let meta = fs::metadata(path)
         .map_err(|e| ReadError::Unreadable(format!("cannot stat {label}: {e}")))?;
     if !meta.is_file() {
