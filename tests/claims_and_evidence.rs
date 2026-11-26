@@ -34,11 +34,19 @@ fn evidence_states_are_reported_per_pointer_and_never_count_as_proof_yet() {
     fs::write(dir.join("binary.dat"), [0xffu8, 0xfe]).unwrap();
     let outside = project("states-outside");
     fs::write(outside.join("secret.json"), "{}").unwrap();
-    let mut input = call(
-        "adsertio_claim",
-        r#"{"summary":"Everything checks out","id":"all","evidence":["chisel:.chisel/store","trammel:.trammel/store","probatio:binary.dat","chisel:.chisel/store#tests"]}"#,
-        1,
+    // Selector-less and unknown selectors are refused at write since 1.5.0,
+    // but a claim file can still hold them, so it is written directly.
+    write_claim(
+        &dir,
+        "all",
+        &[
+            "chisel:.chisel/store",
+            "trammel:.trammel/store",
+            "probatio:binary.dat",
+            "chisel:.chisel/store#tests",
+        ],
     );
+    let mut input = call("adsertio_ls", "{}", 1);
     input += &call("adsertio_view", r#"{"id":"all"}"#, 2);
     input += &call("adsertio_view", r#"{"verdict":"verified"}"#, 3);
     let r = talk(&dir, input.as_bytes());
@@ -72,7 +80,7 @@ fn symlinks_cannot_smuggle_outside_files_in() {
     std::os::unix::fs::symlink(&outside, dir.join("link")).unwrap();
     let mut input = call(
         "adsertio_claim",
-        r#"{"summary":"s","evidence":["chisel:link/secret.json"]}"#,
+        r#"{"summary":"s","evidence":["chisel:link/secret.json#test:t1"]}"#,
         1,
     );
     input += &call("adsertio_view", "{}", 2);

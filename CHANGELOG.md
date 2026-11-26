@@ -32,6 +32,29 @@ the MCP server and the session hook agree on it.
   field. The `adsertio_claim` and `adsertio_doctor` descriptions, the server
   instructions and `adsertio --help` name Relatum.
 - The error for a pointer over 300 characters now says so.
+- A pointer whose shape can never be valid is refused when a claim is written
+  or attached (CLI and MCP, single and batch; a batch writes nothing and the
+  error names the item), instead of being stored and judged `unreadable` at
+  every view: a Trammel or Chisel pointer with no selector or an unknown one,
+  an empty or bad id, a bad Probatio selector, a Relatum pointer with no note
+  id or a bad one, and a Relatum path ending in `.md` (the note file, not the
+  store folder). Claims cannot be overwritten and pointers cannot be removed,
+  so a bad first pointer used to leave a claim unverified for good. Whether
+  the evidence is there, and freshness, are still judged at view. Pointers
+  already stored are read as before (no migration).
+- The error is one line with the pointer, the expected shape and, when the
+  text makes it plain, the fix: `relatum:_shared/no-deps` and
+  `relatum:.swarmnotes/_shared/no-deps.md` both get `did you mean
+  relatum:.swarmnotes#_shared/no-deps?`, and `chisel:.chisel/store#t1` gets
+  `did you mean chisel:.chisel/store#test:t1?`.
+- The selector grammar is defined once, in `src/selector.rs`. The Trammel,
+  Chisel, Probatio and Relatum readers and the write-time check all call it,
+  and `adsertio_guide`'s `selectors` list comes from it.
+- `tests/pointer_shapes.rs`: a table of accepted and refused selectors per
+  tool that the writer and the reader must agree on, claim and attach through
+  the CLI and MCP, batch all-or-nothing, the suggestions word for word, a
+  store left unchanged on refusal, and a stored bad pointer still read as
+  `unreadable`.
 - `tests/relatum.rs`: every state, the CLI and MCP end to end, mixed claims,
   hostile paths, bytes that are not a note, freshness, and doctor.
 

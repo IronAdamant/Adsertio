@@ -31,16 +31,19 @@ pub struct Claim {
 /// `<tool>:<path>[#selector]`, the tool one of `EVIDENCE_TOOLS`, the path
 /// relative to the project. No spaces, commas or brackets.
 pub fn valid_pointer(p: &str) -> Result<(), String> {
-    let (tool, rest) = p
-        .split_once(':')
-        .ok_or_else(|| format!("evidence \"{}\" must look like tool:path", fsx::clip(p, 60)))?;
+    if !p.contains(':') {
+        return Err(format!(
+            "evidence \"{}\" must look like tool:path",
+            fsx::clip(p, 60)
+        ));
+    }
+    let (tool, path, _) = crate::selector::split(p);
     if !EVIDENCE_TOOLS.contains(&tool) {
         return Err(format!(
             "evidence tool \"{tool}\" is not one of: {}",
             EVIDENCE_TOOLS.join(", ")
         ));
     }
-    let path = rest.split('#').next().unwrap_or("");
     if path.is_empty()
         || p.chars().count() > 300
         || p.chars()

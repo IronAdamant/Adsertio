@@ -21,6 +21,7 @@
 use crate::claim;
 use crate::fsx;
 use crate::read::{self, ReadError, MAX_EVIDENCE_BYTES};
+use crate::selector;
 use crate::verdict::{Evidence, State};
 use std::path::Path;
 
@@ -30,28 +31,12 @@ pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
     if let Err(text) = claim::valid_pointer(pointer) {
         return evidence(pointer, State::Unreadable, text);
     }
-    let rest = pointer.split_once(':').map(|(_, rest)| rest).unwrap_or("");
-    let (rel, id) = match rest.split_once('#') {
-        Some((rel, id)) => (rel.trim_end_matches('/'), id),
-        None => (rest.trim_end_matches('/'), ""),
+    let (_, rel, selector) = selector::split(pointer);
+    let rel = rel.trim_end_matches('/');
+    let id = match selector::relatum(selector.unwrap_or("")) {
+        Ok(id) => id,
+        Err(text) => return evidence(pointer, State::Unreadable, text),
     };
-    if id.is_empty() {
-        return evidence(
-            pointer,
-            State::Unreadable,
-            "a note id is required after #, such as relatum:.swarmnotes#net/retry-decision",
-        );
-    }
-    if !valid_id(id) {
-        return evidence(
-            pointer,
-            State::Unreadable,
-            format!(
-                "\"{}\" is not a Relatum note id: segments match _?[a-z0-9][a-z0-9-]*, joined by /",
-                fsx::clip(id, 60)
-            ),
-        );
-    }
     match judge(project, rel, id) {
         Ok((state, detail)) => evidence(pointer, state, detail),
         Err(ReadError::Missing(text)) => evidence(pointer, State::Missing, text),
@@ -69,22 +54,6 @@ fn evidence(pointer: &str, state: State, detail: impl Into<String>) -> Evidence 
         trees: Vec::new(),
         malformed: false,
     }
-}
-
-/// A note id segment: `_?[a-z0-9][a-z0-9-]*` (Relatum `grammar::valid_segment`).
-fn valid_segment(segment: &str) -> bool {
-    let bytes = segment.as_bytes();
-    let start = usize::from(bytes.first() == Some(&b'_'));
-    let alnum = |byte: &u8| byte.is_ascii_lowercase() || byte.is_ascii_digit();
-    bytes.get(start).is_some_and(alnum)
-        && bytes[start + 1..]
-            .iter()
-            .all(|byte| alnum(byte) || *byte == b'-')
-}
-
-/// A note id: segments joined by `/` (Relatum `grammar::valid_id`).
-pub fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.split('/').all(valid_segment)
 }
 
 /// The store, then the note in it, then its frontmatter.
@@ -205,7 +174,7 @@ fn parse(text: &str) -> Result<Note, String> {
     if status == "superseded" {
         match superseded_by {
             None => return Err("status is superseded but superseded_by is missing".into()),
-            Some(by) if !valid_id(by) => {
+            Some(by) if !selector::note_id(by) => {
                 return Err(format!(
                     "superseded_by \"{}\" is not a note id",
                     fsx::clip(by, 60)
@@ -238,18 +207,6 @@ fn parse(text: &str) -> Result<Note, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn ids_follow_the_relatum_grammar() {
-        for good in ["a", "net/retry-decision", "_shared/style", "a/b/c-1", "0"] {
-            assert!(valid_id(good), "{good}");
-        }
-        for bad in [
-            "", "/a", "a/", "a//b", "_", "_-a", "-a", "A", "a b", "a.md", "..", "a/../b", "a_b",
-        ] {
-            assert!(!valid_id(bad), "{bad}");
-        }
-    }
 
     #[test]
     fn frontmatter_is_read_the_way_relatum_reads_it() {

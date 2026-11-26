@@ -44,7 +44,7 @@ fn cli_claim_and_view_round_trip() {
             "--summary",
             "Tests pass",
             "--evidence",
-            "chisel:a.json",
+            "chisel:a.json#test:t1",
             "--evidence",
             "probatio:b.json"
         ]

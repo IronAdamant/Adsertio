@@ -140,6 +140,8 @@ For Probatio, "finished" means no result is `flaky`, `error`, or `no coverage`, 
 
 A Relatum note id is its path under the store without `.md`, such as `net/retry-decision`. When a rule is superseded, a claim that points at it is refuted, and the detail names the note that replaced it: point the claim at that note instead. Adsertio does not follow the supersede chain, so a pointer always judges the note it names. A note Relatum could not read (no frontmatter, no `kind` or `summary`, an unknown `status`, or `superseded` with no `superseded_by`) is `unreadable`.
 
+`adsertio claim` and `adsertio attach` refuse a pointer whose selector can never be valid (a Trammel or Chisel pointer with no selector, an unknown selector, an empty or bad id, or a Relatum path that names the note's `.md` file instead of the store folder), and nothing is written. The one-line error names the pointer and the expected shape, and suggests a fix when the text makes it plain: `relatum:_shared/no-deps` gets `did you mean relatum:.swarmnotes#_shared/no-deps?`. Whether the file, row or note is there is still judged when the claim is viewed.
+
 A `probatio mutate diff` run is always `inconclusive`. Probatio does not write down the full list of mutants a diff plans, so a call capped by `--max-mutants` looks the same on disk as a whole one. Point at one mutant (`#mutant:<id>`), or score with `probatio mutate generate` and `probatio mutate run` to get a whole run Adsertio can check.
 
 ### When a pass does not count

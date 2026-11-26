@@ -5,8 +5,12 @@ is true, with pointers to proof that Trammel, Chisel or Probatio left on disk,
 or to a project rule Relatum keeps (`relatum:.swarmnotes#<note-id>`).
 
 - Record a claim with `adsertio_claim`. Point at evidence as `tool:path#selector`,
-  for example `trammel:.trammel/store#plan-1/step-1`. Do not paste results in.
-- Add a pointer later with `adsertio_attach`. A bad pointer is rejected.
+  for example `trammel:.trammel/store#plan-1/step-1` or
+  `relatum:.swarmnotes#<note-id>` (the store folder, then `#`, then the note
+  id; never the `.md` file). Do not paste results in.
+- Add a pointer later with `adsertio_attach`. A pointer of the wrong shape is
+  rejected and nothing is written; the error gives the expected shape, and
+  often the corrected pointer.
 - Call `adsertio_view` to see each claim as verified, refuted or unverified.
 - `adsertio_ls` lists claims without reading the evidence and does not report a
   verdict. With no `limit`, `adsertio_ls` and `adsertio_view` return every

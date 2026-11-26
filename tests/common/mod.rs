@@ -56,6 +56,17 @@ pub fn call(name: &str, args: &str, id: u32) -> String {
     format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"tools/call\",\"params\":{{\"name\":\"{name}\",\"arguments\":{args}}}}}\n")
 }
 
+/// Write a claim file directly, as stored data that `adsertio_claim` would
+/// refuse (a pointer whose selector has the wrong shape) can still hold it.
+pub fn write_claim(dir: &Path, id: &str, evidence: &[&str]) {
+    let path = dir.join(".adsertio/claims").join(format!("{id}.md"));
+    let text = format!(
+        "---\nsummary: {id}\nauthor: main\ncreated: 2026-01-01T00:00:00Z\nevidence: [{}]\n---\n",
+        evidence.join(", ")
+    );
+    std::fs::write(path, text).unwrap();
+}
+
 pub fn is_error(reply: &str) -> bool {
     reply.contains("\"isError\":true")
 }

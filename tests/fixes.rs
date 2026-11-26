@@ -138,7 +138,7 @@ fn pointers_that_cannot_resolve_are_rejected_at_write() {
         &dir,
         call(
             "adsertio_claim",
-            r#"{"summary":"ok","id":"ok","evidence":["trammel:.trammel/store"]}"#,
+            r#"{"summary":"ok","id":"ok","evidence":["trammel:.trammel/store#plan-1"]}"#,
             1,
         )
         .as_bytes(),
@@ -232,7 +232,7 @@ fn view_can_filter_states_and_drop_detail() {
             call(
                 "adsertio_claim",
                 &format!(
-                    r#"{{"summary":"{id}","id":"{id}","evidence":["trammel:.trammel/store"]}}"#
+                    r#"{{"summary":"{id}","id":"{id}","evidence":["trammel:.trammel/store#plan-1"]}}"#
                 ),
                 1,
             )

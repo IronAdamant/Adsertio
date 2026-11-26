@@ -185,14 +185,14 @@ fn a_killed_holder_frees_the_lock_at_once() {
     holder.kill().unwrap();
     holder.wait().unwrap();
     let started = Instant::now();
-    ok(&attach(&dir, "held", "trammel:.trammel/store#plan-after"));
+    ok(&attach(&dir, "held", "trammel:.trammel/store#plan-77"));
     assert!(
         started.elapsed() < Duration::from_secs(2),
         "attach waited {:?} after its holder was killed",
         started.elapsed()
     );
     let text = body(&dir, "held");
-    assert!(text.contains("#plan-after"), "{text}");
+    assert!(text.contains("#plan-77"), "{text}");
     assert!(!text.contains("#plan-lost"), "{text}");
     assert!(dir.join(".adsertio/locks/held.lock").is_file());
 }

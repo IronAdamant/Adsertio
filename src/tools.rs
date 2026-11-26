@@ -169,7 +169,7 @@ fn draft(a: &Args) -> Result<Draft, String> {
     claim::validate_summary(summary)?;
     let mut evidence: Vec<String> = a.list("evidence").iter().map(|s| s.to_string()).collect();
     for p in &evidence {
-        claim::valid_pointer(p)?;
+        crate::selector::check(p)?;
     }
     evidence = dedupe(evidence);
     if evidence.len() > claim::MAX_POINTERS {
@@ -254,6 +254,9 @@ fn nothing_written(label: &str, e: &str) -> String {
         .strip_suffix("; nothing was written")
         .or_else(|| e.strip_suffix(". Nothing was written"))
         .unwrap_or(e);
+    if e.ends_with('?') {
+        return format!("{label}: {e} Nothing was written.");
+    }
     format!("{label}: {e}. Nothing was written.")
 }
 
@@ -425,7 +428,7 @@ fn incoming_pointers(a: &Args) -> Result<Vec<String>, String> {
         return Err("evidence is empty; pass one or more pointers".into());
     }
     for pointer in &incoming {
-        claim::valid_pointer(pointer)?;
+        crate::selector::check(pointer)?;
     }
     let mut seen = Vec::new();
     for pointer in &incoming {
@@ -912,20 +915,7 @@ fn guide(_a: &Args) -> Result<Value, String> {
         ),
         (
             "selectors",
-            Value::Array(vec![
-                Value::str("trammel:.trammel/store#plan-<id>/step-<id>"),
-                Value::str("trammel:.trammel/store#plan-<id>"),
-                Value::str("trammel:.trammel/store#constraint-<id>"),
-                Value::str("trammel:.trammel/store#failure-<id>"),
-                Value::str("chisel:.chisel/store#test:<test_id>"),
-                Value::str("chisel:.chisel/store#file:<path>"),
-                Value::str("probatio:<out-dir>"),
-                Value::str("probatio:<out-dir>#survivors"),
-                Value::str("probatio:out/run#survivors"),
-                Value::str("probatio:<out-dir>#mutant:<id>"),
-                Value::str("probatio:<out-dir>#ledger"),
-                Value::str("relatum:.swarmnotes#<note-id>"),
-            ]),
+            Value::Array(crate::selector::SHAPES.iter().map(|s| Value::str(*s)).collect()),
         ),
         (
             "paging",
@@ -936,7 +926,7 @@ fn guide(_a: &Args) -> Result<Value, String> {
         (
             "writes",
             Value::str(
-                "Record all claims in one call: adsertio_claim with claims, a list of up to 50 {summary, evidence, id?}. Add pointers to several claims in one call: adsertio_attach with items, a list of {id, evidence}. Every item is checked first and a bad one writes nothing. Ids in one call must differ. adsertio_claim never overwrites. A repeated pointer is an error and the file is left unchanged. A claim holds at most 50 pointers. The body is at most 20000 bytes. The claim file is at most 262144 bytes. Duplicate tags and evidence on a new claim are kept once.",
+                "Record all claims in one call: adsertio_claim with claims, a list of up to 50 {summary, evidence, id?}. Add pointers to several claims in one call: adsertio_attach with items, a list of {id, evidence}. Every item is checked first and a bad one writes nothing. Ids in one call must differ. adsertio_claim never overwrites. A repeated pointer is an error and the file is left unchanged. A claim holds at most 50 pointers. The body is at most 20000 bytes. The claim file is at most 262144 bytes. Duplicate tags and evidence on a new claim are kept once. A pointer whose selector can never be valid (see selectors) is refused, with the expected shape and often the fix; whether its file or row is there is judged at view. A Relatum pointer is the store folder, then #, then the note id, never the .md file.",
             ),
         ),
     ]))

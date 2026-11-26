@@ -49,7 +49,8 @@ cargo build --release --locked
 - `src/lock.rs` shared locks on Trammel's and Chisel's lock files.
   `src/read.rs` snapshots, the journal, compact tables.
 - `src/trammel.rs`, `src/chisel.rs`, `src/probatio.rs`, `src/relatum.rs` the
-  adapters.
+  adapters. `src/selector.rs` the selector grammar, defined once: the
+  adapters parse with it and claim and attach refuse a bad shape with it.
 - `src/trammel_idx.rs`, `src/chisel_idx.rs` one index per snapshot per call.
 - `src/paging.rs` view pages and the `after` cursor.
 - `src/cache.rs` reuses one indexed snapshot, one `git rev-parse HEAD HEAD^{tree}`, and one `git diff-tree` per recorded tree, for every claim in a single view or check.
@@ -66,7 +67,7 @@ cargo build --release --locked
   `tests/chisel.rs`, `tests/probatio.rs`, `tests/relatum.rs`, `tests/fresh.rs`, `tests/attach_ls.rs`,
   `tests/load.rs`, `tests/fixes.rs`, `tests/perf.rs`, `tests/ux.rs`,
   `tests/review3.rs`, `tests/review4.rs`, `tests/review5.rs`,
-  `tests/v130.rs`, `tests/v140.rs`, `tests/oslock.rs`, `tests/tool_budget.rs`,
+  `tests/v130.rs`, `tests/v140.rs`, `tests/oslock.rs`, `tests/pointer_shapes.rs`, `tests/tool_budget.rs`,
   `tests/zero_deps.rs`:
   the failure modes the design avoids. Keep them passing. `tests/common/mod.rs`
   holds shared helpers. Fixtures in `tests/fixtures/probatio/real` and

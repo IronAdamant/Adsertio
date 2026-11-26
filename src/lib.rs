@@ -20,6 +20,7 @@ pub mod paging;
 pub mod probatio;
 pub mod read;
 pub mod relatum;
+pub mod selector;
 pub mod store;
 pub mod tool;
 pub mod tools;

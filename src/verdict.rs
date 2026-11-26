@@ -107,7 +107,7 @@ pub fn read_evidence(project: &Path, pointer: &str) -> Evidence {
     if let Err(e) = claim::valid_pointer(pointer) {
         return mk(State::Unreadable, e);
     }
-    let (tool, rest) = pointer.split_once(':').unwrap_or(("", pointer));
+    let (tool, path, _) = crate::selector::split(pointer);
     if tool == "trammel" {
         return crate::trammel::evaluate(project, pointer);
     }
@@ -120,7 +120,6 @@ pub fn read_evidence(project: &Path, pointer: &str) -> Evidence {
     if tool == "relatum" {
         return crate::relatum::evaluate(project, pointer);
     }
-    let path = rest.split('#').next().unwrap_or("");
     let file = match fsx::project_file(project, path) {
         Ok(f) => f,
         Err(e) if e.ends_with("does not exist") => return mk(State::Missing, e),

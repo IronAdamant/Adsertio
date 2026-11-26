@@ -67,6 +67,9 @@ Trammel and Chisel pointers with no selector are `unreadable` (a selector is
 required) once the file itself can be read. A missing file is `missing`. A
 Probatio pointer with no selector means the whole run. A Relatum pointer with
 no note id, or a bad one, is `unreadable` whether or not the store is there.
+Since 1.5.0 such pointers are refused when a claim is written or attached
+(section 6), so they reach a view only from a claim file written by hand or
+by an earlier version, and are read as above.
 
 ## 3. Selectors
 
@@ -376,6 +379,39 @@ file fails the whole view and the whole list. It is not left out.
 - A pointer path with a backslash, a drive letter, a leading slash, or `..` is
   an error at `adsertio_claim` and `adsertio_attach`. Use a relative path with
   forward slashes inside the project.
+- Write-time and view-time checks. `adsertio_claim` and `adsertio_attach`
+  (CLI and MCP, single and batch) check each pointer's shape, with the same
+  selector grammar the readers use (section 3, `src/selector.rs`), and refuse
+  a pointer that can never be valid. A refused pointer writes nothing; in a
+  batch the error names the item (`claims item 2: ...`, `attach item 2: ...`).
+  At write time:
+  - the pointer form and path rules above;
+  - Trammel: a selector, one of `plan-<id>/step-<id>`, `plan-<id>`,
+    `constraint-<id>`, `failure-<id>`, each id digits that fit a signed
+    64-bit integer;
+  - Chisel: a selector, `test:<test_id>` with a non-empty id, or
+    `file:<path>` with a non-empty path and no `..` part;
+  - Probatio: none, `survivors`, `ledger`, or `mutant:<id>` where `<id>` is
+    one file name (non-empty, no `/`, `\` or `..`). `#ledger` is accepted:
+    it is a valid shape that never passes;
+  - Relatum: a note id after `#` (section 3), and a path that names the
+    store folder: a path ending in `.md` (after any trailing `/`) is refused.
+
+  Everything else is judged when the claim is viewed: whether the file, row,
+  run or note is there (`missing`), whether it can be read (`unreadable`),
+  and freshness (`stale`). A pointer already stored is read as it always was,
+  so a stored pointer with a bad selector views as `unreadable`; there is no
+  migration and the claim is not damaged.
+
+  The error is one line: `evidence "<pointer>": <what is wrong>. Expected
+  <shape>`, then `; did you mean <pointer>?` when the fix is plain from the
+  text alone (no file is read). Relatum `<x>` with no `#`, `<x>` a note id,
+  suggests `relatum:.swarmnotes#<x>`. A Relatum path with a `.swarmnotes`
+  segment followed by a note id, with or without `.md` (`.swarmnotes/<id>.md`
+  or `.swarmnotes/<id>` with no `#`), is split at that segment:
+  `relatum:.swarmnotes#<id>`. A Chisel selector with no `test:` or `file:`
+  suggests `file:<x>` when it holds a `/`, else `test:<x>`. A suggestion is
+  offered only when it would itself be accepted.
 - `adsertio_guide` `{}` returns pointer shapes, the verdict rule, paging, and
   what to call after compaction. It does not read the store.
 - `adsertio_doctor` `{fix?}` returns `{ok, checks, fixed?}`. See section 7.

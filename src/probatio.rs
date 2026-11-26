@@ -24,6 +24,7 @@ use crate::claim;
 use crate::fsx;
 use crate::json::Value;
 use crate::read::{self, ReadError};
+use crate::selector::{self, Probatio as Sel};
 use crate::verdict::{Evidence, State};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -51,13 +52,10 @@ pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
     if let Err(text) = claim::valid_pointer(pointer) {
         return evidence(pointer, State::Unreadable, text);
     }
-    let rest = pointer.split_once(':').map(|(_, rest)| rest).unwrap_or("");
-    let (rel, selector) = match rest.split_once('#') {
-        Some((rel, selector)) => (rel, selector),
-        None => (rest, ""),
-    };
+    let (_, rel, selector) = selector::split(pointer);
     let rel = rel.trim_end_matches(['/', '\\']);
-    if selector == "ledger" {
+    let sel = selector::probatio(selector.unwrap_or(""));
+    if sel == Ok(Sel::Ledger) {
         return ledger(project, pointer, rel);
     }
     let out_dir = match resolve(project, rel) {
@@ -68,17 +66,12 @@ pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
     if !out_dir.is_dir() {
         return file_instead_of_folder(project, pointer, rel);
     }
-    if selector.is_empty() || selector == "survivors" {
-        return whole_run(project, pointer, rel, &out_dir);
+    match sel {
+        Ok(Sel::Run) => whole_run(project, pointer, rel, &out_dir),
+        Ok(Sel::Ledger) => ledger(project, pointer, rel),
+        Ok(Sel::Mutant(id)) => one_mutant(project, pointer, rel, &id),
+        Err(text) => evidence(pointer, State::Unreadable, text),
     }
-    if let Some(id) = selector.strip_prefix("mutant:") {
-        return one_mutant(project, pointer, rel, id);
-    }
-    evidence(
-        pointer,
-        State::Unreadable,
-        format!("unknown probatio selector \"{}\"", fsx::clip(selector, 60)),
-    )
 }
 
 fn evidence(pointer: &str, state: State, detail: impl Into<String>) -> Evidence {
@@ -417,17 +410,8 @@ fn inside_project(project: &Path, path: &str) -> Option<String> {
     }
 }
 
+/// `id` is a single file name: `selector::probatio` checked it.
 fn one_mutant(project: &Path, pointer: &str, rel: &str, id: &str) -> Evidence {
-    if !safe_id(id) {
-        return evidence(
-            pointer,
-            State::Unreadable,
-            format!(
-                "mutant id \"{}\" is not a single file name",
-                fsx::clip(id, 60)
-            ),
-        );
-    }
     let rel_file = format!("{rel}/results/{id}.json");
     let value = match read::read_json(project, &rel_file, "probatio") {
         Ok(value) => value,
@@ -523,16 +507,6 @@ fn ledger(project: &Path, pointer: &str, rel: &str) -> Evidence {
             entries.len()
         ),
     )
-}
-
-fn safe_id(id: &str) -> bool {
-    !id.is_empty()
-        && id != "."
-        && id != ".."
-        && !id.contains('/')
-        && !id.contains('\\')
-        && !id.contains('\0')
-        && !id.contains("..")
 }
 
 /// `None` when `results/` is absent. An empty folder is `Some` of an empty list.

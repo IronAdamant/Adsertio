@@ -11,25 +11,15 @@
 
 use crate::claim;
 use crate::read::{self, ReadError};
+use crate::selector::{self, Trammel as Sel};
 use crate::verdict::{Evidence, State};
 use std::path::Path;
-
-enum Sel {
-    Step { plan: i64, step: i64 },
-    Plan(i64),
-    Constraint(i64),
-    Failure(i64),
-}
 
 pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
     if let Err(text) = claim::valid_pointer(pointer) {
         return evidence(pointer, State::Unreadable, text);
     }
-    let rest = pointer.split_once(':').map(|(_, rest)| rest).unwrap_or("");
-    let (rel, selector) = match rest.split_once('#') {
-        Some((rel, selector)) => (rel, selector),
-        None => (rest, ""),
-    };
+    let (_, rel, selector) = selector::split(pointer);
     let index = match crate::cache::trammel(project, rel, || {
         let loaded = read::load_trammel_text(project, rel)?;
         crate::trammel_idx::parse(&loaded.text, rel)
@@ -38,14 +28,7 @@ pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
         Err(ReadError::Missing(text)) => return evidence(pointer, State::Missing, text),
         Err(ReadError::Unreadable(text)) => return evidence(pointer, State::Unreadable, text),
     };
-    if selector.is_empty() {
-        return evidence(
-            pointer,
-            State::Unreadable,
-            "a selector is required: plan-<id>/step-<id>, plan-<id>, constraint-<id>, or failure-<id>",
-        );
-    }
-    let sel = match parse_selector(selector) {
+    let sel = match selector::trammel(selector.unwrap_or("")) {
         Ok(sel) => sel,
         Err(text) => return evidence(pointer, State::Unreadable, text),
     };
@@ -73,37 +56,6 @@ fn evidence(pointer: &str, state: State, detail: impl Into<String>) -> Evidence 
         trees: Vec::new(),
         malformed: false,
     }
-}
-
-fn parse_selector(selector: &str) -> Result<Sel, String> {
-    if let Some(rest) = selector.strip_prefix("plan-") {
-        if let Some((plan, step)) = rest.split_once("/step-") {
-            if !plan.is_empty() && !plan.contains('/') {
-                return Ok(Sel::Step {
-                    plan: parse_id(plan)?,
-                    step: parse_id(step)?,
-                });
-            }
-        } else if !rest.is_empty() && !rest.contains('/') {
-            return Ok(Sel::Plan(parse_id(rest)?));
-        }
-    } else if let Some(rest) = selector.strip_prefix("constraint-") {
-        return Ok(Sel::Constraint(parse_id(rest)?));
-    } else if let Some(rest) = selector.strip_prefix("failure-") {
-        return Ok(Sel::Failure(parse_id(rest)?));
-    }
-    Err(format!(
-        "unknown trammel selector \"{}\"",
-        crate::fsx::clip(selector, 60)
-    ))
-}
-
-fn parse_id(text: &str) -> Result<i64, String> {
-    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(format!("\"{text}\" is not an id"));
-    }
-    text.parse::<i64>()
-        .map_err(|_| format!("\"{text}\" is not an id"))
 }
 
 fn judge(

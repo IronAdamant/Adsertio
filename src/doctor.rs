@@ -614,7 +614,7 @@ fn find_notes(dir: &Path, prefix: &str, out: &mut Vec<String>) {
             find_notes(&dir.join(&name), &format!("{prefix}{name}/"), out);
         } else if let Some(stem) = name.strip_suffix(".md") {
             let id = format!("{prefix}{stem}");
-            if crate::relatum::valid_id(&id) {
+            if crate::selector::note_id(&id) {
                 out.push(id);
             }
         }

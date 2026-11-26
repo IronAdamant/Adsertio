@@ -13,24 +13,16 @@
 
 use crate::claim;
 use crate::read::{self, ReadError};
+use crate::selector::{self, Chisel as Sel};
 use crate::verdict::{Evidence, State};
 use std::fs;
 use std::path::Path;
-
-enum Sel {
-    Test(String),
-    File(String),
-}
 
 pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
     if let Err(text) = claim::valid_pointer(pointer) {
         return evidence(pointer, State::Unreadable, text);
     }
-    let rest = pointer.split_once(':').map(|(_, rest)| rest).unwrap_or("");
-    let (rel, selector) = match rest.split_once('#') {
-        Some((rel, selector)) => (rel, selector),
-        None => (rest, ""),
-    };
+    let (_, rel, selector) = selector::split(pointer);
     if path_leaves(rel) {
         return match read::read_chisel(project, rel) {
             Err(ReadError::Missing(text)) => evidence(pointer, State::Missing, text),
@@ -57,14 +49,7 @@ pub fn evaluate(project: &Path, pointer: &str) -> Evidence {
         Err(ReadError::Missing(text)) => return evidence(pointer, State::Missing, text),
         Err(ReadError::Unreadable(text)) => return evidence(pointer, State::Unreadable, text),
     };
-    if selector.is_empty() {
-        return evidence(
-            pointer,
-            State::Unreadable,
-            "a selector is required: test:<test_id> or file:<path>",
-        );
-    }
-    let sel = match parse_selector(selector) {
+    let sel = match selector::chisel(selector.unwrap_or("")) {
         Ok(sel) => sel,
         Err(text) => return evidence(pointer, State::Unreadable, text),
     };
@@ -211,25 +196,6 @@ fn some(names: &[&str]) -> String {
         names[..SHOWN].join(", "),
         names.len() - SHOWN
     )
-}
-
-fn parse_selector(selector: &str) -> Result<Sel, String> {
-    if let Some(id) = selector.strip_prefix("test:") {
-        if id.is_empty() {
-            return Err("test id is empty".into());
-        }
-        return Ok(Sel::Test(id.to_string()));
-    }
-    if let Some(path) = selector.strip_prefix("file:") {
-        if path.is_empty() || path.split(['/', '\\']).any(|part| part == "..") {
-            return Err("file selector is empty or contains ..".into());
-        }
-        return Ok(Sel::File(path.replace('\\', "/")));
-    }
-    Err(format!(
-        "unknown chisel selector \"{}\"",
-        crate::fsx::clip(selector, 60)
-    ))
 }
 
 fn load_index(project: &Path, rel: &str) -> Result<crate::chisel_idx::Index, ReadError> {
