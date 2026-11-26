@@ -19,6 +19,10 @@ Adsertio ties a one-line claim to that proof. Each time you look at the claim, i
 
 The answer is worked out fresh on every view and is never stored. A file Adsertio does not understand never counts as proof.
 
+![Adsertio in a terminal: a malformed pointer refused with a suggested fix, then six claims judged verified, refuted or unverified from evidence on disk](docs/images/claims.png)
+
+*Real output from a demo crate: test results recorded by Chisel, rules kept in Relatum, and a plan step with no evidence yet, which stays unverified.*
+
 What it deliberately does not do:
 
 - run Trammel, Chisel, Probatio, or Relatum, or write into their folders
